@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# claude-nim — start the NIM proxy if needed, then launch Claude Code routed through it.
+# Works from any directory in WSL. Invokes Windows claude.exe via interop since
+# WSL1 is incompatible with the @anthropic-ai/claude-code npm package on this host.
+set -eu
+
+PORT=${NIM_PROXY_PORT:-8082}
+PROXY_DIR=/root/repos/free-claude-code
+LOG=/tmp/nim-proxy.log
+CLAUDE_EXE=/mnt/c/Users/Shadow/AppData/Roaming/npm/claude.cmd
+
+listening() {
+    ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE ":${PORT}\$"
+}
+
+if listening; then
+    echo "[claude-nim] proxy already listening on :${PORT} — reusing" >&2
+else
+    echo "[claude-nim] starting NIM proxy (log: ${LOG})..." >&2
+    cd "${PROXY_DIR}"
+    nohup /root/.local/bin/uv run uvicorn server:app --host 0.0.0.0 --port "${PORT}" \
+        >"${LOG}" 2>&1 &
+    disown $! 2>/dev/null || true
+    for _ in $(seq 1 20); do
+        sleep 1
+        if listening; then break; fi
+    done
+    if ! listening; then
+        echo "[claude-nim] ERROR: proxy didn't come up in 20s. Recent log:" >&2
+        tail -20 "${LOG}" >&2
+        exit 1
+    fi
+    echo "[claude-nim] proxy ready on http://localhost:${PORT}" >&2
+fi
+
+export ANTHROPIC_AUTH_TOKEN=freecc
+export ANTHROPIC_BASE_URL="http://localhost:${PORT}"
+# WSLENV makes these visible to the Windows claude.exe invoked via interop.
+export WSLENV="${WSLENV:+$WSLENV:}ANTHROPIC_AUTH_TOKEN:ANTHROPIC_BASE_URL"
+
+if [ -x "${CLAUDE_EXE}" ]; then
+    exec "${CLAUDE_EXE}" "$@"
+elif command -v claude >/dev/null 2>&1; then
+    exec claude "$@"
+else
+    echo "[claude-nim] ERROR: claude CLI not found at ${CLAUDE_EXE} or on PATH." >&2
+    exit 1
+fi

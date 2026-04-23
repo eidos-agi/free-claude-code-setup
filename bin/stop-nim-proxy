@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# stop-nim-proxy — terminate the NIM proxy listening on :8082 (or $NIM_PROXY_PORT).
+set -eu
+
+PORT=${NIM_PROXY_PORT:-8082}
+
+pids_on_port() {
+    ss -ltnp 2>/dev/null \
+        | awk -v p=":${PORT}" '$4 ~ p"$" {print $NF}' \
+        | grep -oE 'pid=[0-9]+' \
+        | cut -d= -f2 \
+        | sort -u
+}
+
+PIDS=$(pids_on_port)
+if [ -z "${PIDS}" ]; then
+    echo "[stop-nim-proxy] nothing listening on :${PORT}" >&2
+    exit 0
+fi
+
+for pid in ${PIDS}; do
+    echo "[stop-nim-proxy] TERM pid ${pid}"
+    kill "${pid}" 2>/dev/null || true
+done
+
+sleep 1
+REMAINING=$(pids_on_port)
+if [ -n "${REMAINING}" ]; then
+    echo "[stop-nim-proxy] port still busy — forcing KILL" >&2
+    for pid in ${REMAINING}; do
+        kill -9 "${pid}" 2>/dev/null || true
+    done
+fi
+echo "[stop-nim-proxy] done"
