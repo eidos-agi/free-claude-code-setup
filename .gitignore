@@ -1,0 +1,11 @@
+# secrets / env files
+.env
+*.env.local
+
+# install logs (regenerable, not portable)
+*.log
+*.err
+
+# os noise
+.DS_Store
+Thumbs.db
