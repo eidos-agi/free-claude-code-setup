@@ -11,8 +11,10 @@ if %errorlevel% equ 0 (
 )
 
 REM 2. Start proxy in a detached minimized WSL window
-echo [claude-nim] starting NIM proxy in WSL...
-start "NIM Proxy (close this window to stop)" /MIN wsl.exe -d Ubuntu -u root -- bash -c "cd /root/repos/free-claude-code && /root/.local/bin/uv run uvicorn server:app --host 0.0.0.0 --port 8082"
+REM    Tee uvicorn stdout+stderr to /tmp/nim-proxy.log so we can audit traffic
+REM    (check with: wsl cat /tmp/nim-proxy.log | tail -40)
+echo [claude-nim] starting NIM proxy in WSL (log: /tmp/nim-proxy.log)...
+start "NIM Proxy (close this window to stop)" /MIN wsl.exe -d Ubuntu -u root -- bash -c "cd /root/repos/free-claude-code && /root/.local/bin/uv run uvicorn server:app --host 0.0.0.0 --port 8082 2>&1 | tee /tmp/nim-proxy.log"
 
 REM 3. Poll up to 20 seconds for the port to come up
 for /l %%i in (1,1,20) do (
