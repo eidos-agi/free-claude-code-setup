@@ -322,6 +322,14 @@ If Tailscale gets reinstalled or WSL is reregistered, `/etc/resolv.conf` may reg
 **Model response quality feels off vs. real Claude.**
 Expected. Open-weight models (GLM/Kimi/Qwen) are weaker on tool-calling fidelity and long-context coherence. For casual interactive work you won't notice; for agentic workflows, keep real Claude as the primary.
 
+**`claude-nim` chat banner says "API Usage Billing · <email>'s Organization" and responses feel indistinguishable from real Claude.**
+Claude Code's auth precedence prefers a stored OAuth / API-key cred at `%USERPROFILE%\.claude\.credentials.json` over `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN` env vars. If you've ever run `/login` or used `claude.ai` on this Windows account, that cred is cached and will **silently route traffic to real Anthropic on your paid plan even when the proxy is running**. Our launchers now sidestep this by pointing `USERPROFILE` (Windows) / WSLENV-USERPROFILE (bash) at an isolated empty profile at `%LOCALAPPDATA%\claude-nim-profile\`, which has no stored creds so env-var auth wins.
+
+Two tells that the bypass is happening:
+- Response style is polished Anthropic-model output (no visible chain-of-thought leakage even when the proxy has `ENABLE_THINKING=true`)
+- Banner shows your real Anthropic org / subscription tier
+Definitive check: `curl -sS -X POST http://localhost:8082/v1/messages -H "x-api-key: freecc" -H "anthropic-version: 2023-06-01" -H "content-type: application/json" -d '{"model":"claude-haiku-4-20250514","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}'`. The SSE response's `"model"` field will show the actual backing model (e.g. `"stepfun-ai/step-3.5-flash"`). If the proxy routes correctly but Claude Code doesn't use it, the `USERPROFILE` isolation is what's missing.
+
 **Switch to a different provider (OpenRouter, DeepSeek, LM Studio).**
 Edit `.env`, set that provider's API key, change `MODEL_*` values to `open_router/...` / `deepseek/...` / `lmstudio/...`. Restart proxy. See `/root/repos/free-claude-code/README.md` upstream for provider-specific prefix conventions.
 

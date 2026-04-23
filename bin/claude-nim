@@ -40,8 +40,18 @@ fi
 
 export ANTHROPIC_AUTH_TOKEN=freecc
 export ANTHROPIC_BASE_URL="http://localhost:${PORT}"
-# WSLENV makes these visible to the Windows claude.exe invoked via interop.
-export WSLENV="${WSLENV:+$WSLENV:}ANTHROPIC_AUTH_TOKEN:ANTHROPIC_BASE_URL"
+
+# Windows Claude Code reads stored OAuth creds from %USERPROFILE%\.claude\.credentials.json
+# which takes precedence over ANTHROPIC_BASE_URL when present (as is the case if you've
+# logged into claude.ai / Claude Max on this user account). Point USERPROFILE at an
+# isolated empty profile to force env-var auth.
+ISOLATED_PROFILE_WIN='C:\Users\Shadow\AppData\Local\claude-nim-profile'
+ISOLATED_PROFILE_WSL='/mnt/c/Users/Shadow/AppData/Local/claude-nim-profile'
+mkdir -p "${ISOLATED_PROFILE_WSL}/.claude"
+export USERPROFILE="${ISOLATED_PROFILE_WIN}"
+
+# WSLENV carries these into the Windows claude.exe process.
+export WSLENV="${WSLENV:+$WSLENV:}ANTHROPIC_AUTH_TOKEN:ANTHROPIC_BASE_URL:USERPROFILE/w"
 
 if [ -x "${CLAUDE_EXE}" ]; then
     exec "${CLAUDE_EXE}" "$@"

@@ -28,6 +28,12 @@ exit /b 1
 echo [claude-nim] proxy ready on http://localhost:8082
 
 :launch
+REM Isolate from the user's logged-in Claude Max OAuth creds in %USERPROFILE%\.claude\
+REM .credentials.json there otherwise takes precedence over ANTHROPIC_BASE_URL and
+REM all traffic silently hits real Anthropic. A dedicated empty profile forces
+REM Claude Code to fall back to env-var auth.
+set USERPROFILE=%LOCALAPPDATA%\claude-nim-profile
+if not exist "%USERPROFILE%\.claude" mkdir "%USERPROFILE%\.claude" >nul 2>&1
 set ANTHROPIC_AUTH_TOKEN=freecc
 set ANTHROPIC_BASE_URL=http://localhost:8082
 claude %*
