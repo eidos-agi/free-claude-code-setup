@@ -1,215 +1,296 @@
-# Free Claude Code via NVIDIA NIM — Setup Plan
+# Free Claude Code via NVIDIA NIM — Operations Manual
 
-**Created:** 2026-04-23
-**Machine:** Windows 11 Home, user `Shadow`
-**Goal:** Run Claude Code CLI backed by NVIDIA NIM's free tier (40 req/min) using open-source models (GLM 4.7, Kimi K2, etc.), inside WSL/Ubuntu, without disturbing the existing native-Windows Claude Code install or its auth.
+**Purpose.** Make Claude Code usable against NVIDIA NIM's free tier (40 req/min) by running a local translating proxy. The result is a `claude-nim` command that looks and behaves like `claude`, but routes to open-weight models hosted by NVIDIA instead of real Claude.
 
----
+**Status.** Operational. Last verified end-to-end: 2026-04-23.
 
-## What this actually gets us
-
-- Claude Code frontend, unchanged UX
-- Backend swapped from Anthropic → NVIDIA NIM hosted open-source models
-- Free (rate-limited to ~40 req/min, no token caps, no credit card)
-- **Not real Claude** — tool-calling quality and long-context behavior will differ
-- Separate shell/env — the existing paid Claude Code session stays intact
+**Canonical location.** `/root/repos/free-claude-code-setup/` inside WSL Ubuntu (this file). Git-tracked. Windows accesses via `\\wsl$\Ubuntu\root\repos\free-claude-code-setup\`.
 
 ---
 
-## Starting state (verified 2026-04-23)
+## Quick reference
 
-| Component | Status |
-|---|---|
-| Claude Code (Windows-native) | 2.1.118 ✅ |
-| git | 2.54 ✅ |
-| node | 22.2 ✅ |
-| Python (native Windows) | ❌ (MS Store alias only) |
-| uv | ❌ |
-| WSL runtime | installed, WSL 2 default ✅ |
-| WSL distro | **none installed** |
-| Ports 8000 / 8080 / 8082 | all free ✅ |
-
-### Environment quirks (this specific machine)
-
-- **Host is a Shadow PC** (Blade/OVH cloud gaming desktop): `Manufacturer: Blade`, `Model: Shadow Computer`, AMD EPYC 7543P. Everything below flows from this.
-- **No nested virtualization** → WSL2 cannot run here (`HCS_E_HYPERV_NOT_INSTALLED` even with VMP enabled + reboot). CPU reports `SecondLevelAddressTranslationExtensions: False` because it's a guest VM without SLAT passthrough.
-- **Fell back to WSL1** — syscall-translation shim, no hypervisor needed. Sufficient for our use case (Python + uv + git + node + Claude Code CLI). Known limits: no systemd, slower FS on /mnt/c, some Docker use cases broken. Not relevant to this project.
-- **Tailscale is active on the host** (`.ts.net` search domain). WSL inherited placeholder IPv6 DNS (`fec0:0:0:ffff::1-3`) that doesn't resolve. Fix applied: `/etc/wsl.conf` with `[network] generateResolvConf = false` + manual `/etc/resolv.conf` with `1.1.1.1`, `1.0.0.1`, `8.8.8.8`. Marked immutable via `chattr +i` so WSL respawn doesn't stomp it.
+| Task | Command | Runs from |
+|---|---|---|
+| Launch Claude Code via NIM | `claude-nim [args]` | WSL or Windows shell, any dir |
+| Stop the proxy | `stop-nim-proxy` | WSL or Windows shell |
+| Edit model routing | `nano /root/repos/free-claude-code/.env` | WSL |
+| Inspect proxy log | `tail -f /tmp/nim-proxy.log` | WSL |
+| Verify proxy is up | `curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8082/` — expect `401` | either |
+| View operations history | `git log --oneline` | WSL, in this repo |
 
 ---
 
-## Architecture (revised — everything lives in Linux)
+## Architecture
 
 ```
-[WSL Ubuntu]
-    ├── Claude Code CLI (Linux install, separate from Windows-native)
-    │       env: ANTHROPIC_BASE_URL=http://localhost:8082
-    │            ANTHROPIC_AUTH_TOKEN=freecc
-    │       ▼
-    └── free-claude-code proxy on :8082 (uvicorn, Python via uv)
-            │  translates Anthropic API format → NIM format
-            ▼
-[Internet] build.nvidia.com/v1  (NIM hosted inference)
-    │
-    └── GLM 4.7 / Kimi K2 / step-3.5 etc.
-
-[Windows] — untouched
-    └── Existing Claude Code 2.1.118 (paid/real Claude) stays as-is
+[Any shell, Windows or WSL]
+      │
+      ▼
+claude-nim  (launcher — bash in WSL, .bat on Windows)
+      │
+      ├─ ensures proxy is running on localhost:8082
+      │   (curl probe; starts it with nohup + uv if not)
+      │
+      └─ exec claude.exe  (Windows-native Claude Code v2.1.x, npm-installed)
+               │
+               ▼
+         ANTHROPIC_BASE_URL=http://localhost:8082
+         ANTHROPIC_AUTH_TOKEN=freecc
+               │
+               ▼
+         WSL localhost:8082 — uvicorn + FastAPI
+         /root/repos/free-claude-code/ (upstream proxy, git-cloned)
+               │
+               ├─ translates Anthropic API format → NIM
+               ├─ enforces 40/60s rate limit client-side
+               └─ maps Opus/Sonnet/Haiku → GLM/Kimi/Step
+               │
+               ▼
+         https://integrate.api.nvidia.com/v1 (NIM hosted inference)
 ```
 
-Why fully Linux:
-- Python/uv/node tooling is first-class on Linux; tutorial commands copy-paste verbatim
-- No Windows/WSL shell env-var gymnastics — everything in one process space
-- Complete isolation: the paid Claude Code on Windows can't accidentally inherit the proxy env vars
-- Reusable Linux dev environment for future projects
-- WSL filesystem access to Windows drives via `/mnt/c/...` when you want to touch Windows files
+### Why WSL1 and not WSL2
+
+This host is a **Shadow PC** (Blade/OVH cloud gaming desktop, AMD EPYC 7543P). Nested virtualization is not exposed to the guest (`SecondLevelAddressTranslationExtensions: False`), so Hyper-V / WSL2 / Docker Desktop / any other `-v` hardware-accel path flat out cannot run. WSL1 uses syscall translation — no hypervisor, no SLAT needed — and it's sufficient here because the proxy is pure Python + FastAPI + stdlib networking.
+
+### Why Windows Claude Code, not Linux
+
+The `@anthropic-ai/claude-code` npm package has a hard WSL1 refusal in its postinstall. Native Windows Claude Code is already installed and works. WSL1 shares the Windows network namespace, so `localhost:8082` is the same port on both sides — the proxy living in WSL is fully reachable by a Windows-native `claude.exe`.
 
 ---
 
-## Phases
+## File layout
 
-### Phase 1 — Install WSL + Ubuntu
-- Run `wsl --install -d Ubuntu` (requires UAC elevation)
-- Reboot if prompted
-- Complete first-boot username/password setup for Ubuntu
-- Verify: `wsl -l -v` shows Ubuntu running version 2
-- **User touchpoint:** UAC prompt, possible reboot, set Ubuntu username/password
-
-### Phase 2 — Inside Ubuntu: base toolchain
-- `sudo apt update && sudo apt upgrade -y`
-- `sudo apt install -y python3 python3-pip python3-venv git curl build-essential`
-- Install uv: `curl -LsSf https://astral.sh/uv/install.sh | sh`
-- Install Node LTS via nvm (cleaner than apt's node):
-  - `curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash`
-  - `nvm install --lts`
-- Install Claude Code in Linux: `npm install -g @anthropic-ai/claude-code`
-- **Do NOT log in** to this Linux Claude Code with your real account — we're pointing it at the proxy
-- Verify: `python3 --version`, `uv --version`, `git --version`, `node --version`, `claude --version`
-- Create working dir: `~/repos/`
-
-### Phase 3 — NVIDIA NIM API key
-- User signs up / logs in at https://build.nvidia.com
-- Generate key at `build.nvidia.com/settings/api-keys` (starts with `nvapi-`)
-- **User touchpoint:** paste key when prompted — I will not save it in plaintext anywhere except the `.env` it needs to live in
-
-### Phase 4 — Clone & configure free-claude-code
-- `git clone https://github.com/Alishahryar1/free-claude-code.git ~/repos/free-claude-code`
-- `cp .env.example .env`
-- Populate `.env`:
-  ```
-  NVIDIA_NIM_API_KEY="nvapi-..."
-  MODEL_OPUS="nvidia_nim/z-ai/glm4.7"
-  MODEL_SONNET="nvidia_nim/moonshotai/kimi-k2-thinking"
-  MODEL_HAIKU="nvidia_nim/stepfun-ai/step-3.5-flash"
-  MODEL="nvidia_nim/z-ai/glm4.7"
-  ENABLE_THINKING=true
-  ANTHROPIC_AUTH_TOKEN="freecc"
-  ```
-- Inspect `server.py` / requirements before first run — confirm no surprises
-
-### Phase 5 — Smoke test the proxy
-- `uv run uvicorn server:app --host 0.0.0.0 --port 8082` inside WSL
-- From Windows: `curl http://localhost:8082/` to confirm port forwarding works
-- Send a minimal Anthropic-format request, confirm a NIM response comes back
-
-### Phase 6 — Launch Claude Code against the proxy (inside WSL)
-- Second WSL shell (`wsl` from any Windows terminal opens one)
-- Export env in `~/.bashrc` (scoped to Linux, cannot leak to Windows Claude):
-  ```bash
-  export ANTHROPIC_AUTH_TOKEN="freecc"
-  export ANTHROPIC_BASE_URL="http://localhost:8082"
-  ```
-- `source ~/.bashrc` then `claude`
-- Verify model responds; test a simple tool call (file read)
-
-### Phase 7 — Convenience launcher
-- Create `~/bin/claude-nim` script inside Ubuntu:
-  - Ensures proxy is running (starts it via `nohup`/`tmux` if not)
-  - Launches `claude` in the current directory with env set
-- Also create a Windows-side wrapper `C:\Users\Shadow\repos\free-claude-code-setup\claude-nim.bat` that just execs `wsl claude-nim` so you can launch from any Windows folder
-- Test cold-start from fresh cmd prompt and from inside WSL
-
----
-
-## Risks & mitigations
-
-| Risk | Mitigation |
-|---|---|
-| Env vars leak into normal Claude session | Only set per-shell, never System or User env. Keep one terminal window per mode. |
-| WSL install requires reboot, breaks this session | Save plan to disk first (this file). Resume from Phase 2 after reboot. |
-| NIM API key accidentally committed | Folder is not a git repo; `.env` only lives inside the cloned `free-claude-code` repo which already has `.gitignore` for it. Verify before any commit. |
-| Proxy process dies silently | Phase 7 launcher runs it in a visible WSL window so failures are obvious. |
-| Rate-limit (40 req/min) hit during agent loops | Expected. Not a fix — a known ceiling of the free tier. |
-| Model quality shock (vs. real Claude) | Expected. Evaluate after first real task; can swap models by editing `.env` and restarting proxy. |
-
----
-
-## Rollback
-
-Full teardown if we bail:
-- `wsl --unregister Ubuntu` (removes distro, keeps WSL runtime)
-- `rm -rf C:\Users\Shadow\repos\free-claude-code-setup`
-- Delete NIM API key from build.nvidia.com
-
-No changes to existing Claude Code install, no global env var changes, no system-level installs outside WSL.
-
----
-
-## Progress log
-
-- [x] **Phase 1** — WSL + Ubuntu installed (WSL1, not 2 — Shadow PC has no nested virt)
-- [x] **Phase 2** — Python 3.14 (via uv), uv 0.11.7, git 2.43. Node skipped (not needed)
-- [x] **Phase 3** — NIM API key obtained and applied
-- [x] **Phase 4** — Proxy cloned to `/root/repos/free-claude-code/` inside WSL; `.env` configured, perms 600, all three Claude tiers routed to NIM models
-- [x] **Phase 5** — Proxy smoke test: `POST /v1/messages` → live streaming from `moonshotai/kimi-k2-thinking` via NIM ✅
-- [x] **Phase 6** — Windows Claude Code → proxy → NIM → response confirmed end-to-end (one-shot `-p` test returned the expected string)
-- [x] **Phase 7** — Launcher `claude-nim.bat` works: reuses existing proxy if up, otherwise starts it in a minimized WSL window and waits for port to open; `stop-nim-proxy.bat` kills it via `wsl --shutdown`
-
----
-
-## How to use it
-
-**Start / run:**
 ```
-C:\Users\Shadow\repos\free-claude-code-setup\claude-nim.bat
-```
-- Pops a minimized "NIM Proxy" window if the proxy isn't already up
-- Sets `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN` for *this cmd session only*
-- Launches `claude` with any args you pass
+/root/repos/free-claude-code-setup/     ← this repo (git-tracked)
+├── PLAN.md                             ← this file
+├── README.md                           ← one-page quick start
+├── env.template                        ← template for the proxy's .env
+├── .gitignore                          ← excludes .env, *.log, *.err
+├── bin/
+│   ├── claude-nim                      ← bash launcher (WSL)
+│   ├── stop-nim-proxy                  ← bash stopper (WSL)
+│   ├── claude-nim.bat                  ← cmd launcher (Windows)
+│   └── stop-nim-proxy.bat              ← cmd stopper (Windows)
+└── scripts/setup/
+    ├── phase2.sh, phase2b.sh           ← historical bring-up scripts
+    ├── move-to-wsl.sh                  ← one-shot: copied setup folder into WSL
+    └── install-logs/                   ← DISM/BCD/WSL logs from first-time install
 
-**Stop:**
-- Close the "NIM Proxy" taskbar window, OR
-- Run `stop-nim-proxy.bat` (calls `wsl --shutdown`, kills everything in WSL)
+/root/repos/free-claude-code/           ← upstream proxy code (separate git repo)
+├── server.py                           ← entry point (uvicorn app)
+├── pyproject.toml                      ← declares Python >=3.14; uv manages it
+├── uv.lock                             ← locked deps
+├── .env                                ← GITIGNORED; contains NIM API key
+├── nvidia_nim_models.json              ← catalog of available NIM models
+└── ...
 
-**Edit models:** `wsl -d Ubuntu -u root nano /root/repos/free-claude-code/.env` — change `MODEL_OPUS`/`SONNET`/`HAIKU`, save, restart proxy.
+/usr/local/bin/claude-nim               ← symlink → repo bin/claude-nim
+/usr/local/bin/stop-nim-proxy           ← symlink → repo bin/stop-nim-proxy
 
-**Available NIM models** (see `/root/repos/free-claude-code/nvidia_nim_models.json` for full list):
-- Strong agentic: `z-ai/glm4.7`, `z-ai/glm5`, `moonshotai/kimi-k2.5`, `moonshotai/kimi-k2-thinking`
-- Coding-specialized: `qwen/qwen3-coder-480b-a35b-instruct`, `deepseek-ai/deepseek-coder-6.7b-instruct`
-- Fast/light: `stepfun-ai/step-3.5-flash`
-
-**Coexistence with real Claude:** your Windows-native `claude` auth is untouched. Any terminal that DOESN'T set those two env vars still talks to real Anthropic. The proxy only applies when you launch via `claude-nim.bat`.
-
----
-
-## 🔁 RESUME AFTER REBOOT
-
-After you reboot this PC:
-
-1. Open Claude Code (this same directory: `C:\Users\Shadow\repos\free-claude-code-setup\`).
-2. Tell Claude: **"continue the NIM setup"**.
-3. Claude will verify VMP is now active, run `wsl --install -d Ubuntu --no-launch`, wait for download, then walk you through Ubuntu first-run (username/password — pick any; this is a local-only Linux user).
-
-If Claude isn't around, resume manually:
-```powershell
-wsl --install -d Ubuntu --no-launch
-# then launch Ubuntu once from Start Menu to set username/password
-wsl -l -v    # should show Ubuntu  Running  2
+C:\Users\Shadow\bin\claude-nim.bat      ← thin wrapper — calls \\wsl$\...\bin\claude-nim.bat
+C:\Users\Shadow\bin\stop-nim-proxy.bat  ← thin wrapper
+                                        (C:\Users\Shadow\bin is on User PATH)
 ```
 
-Relevant logs from Phase 1 work (safe to delete once Phase 1 is complete):
-- `dism.log`         — WSL feature enable
-- `vmp.log`          — VirtualMachinePlatform enable
-- `vmp-status.log`   — confirms VMP state = Enabled
-- `wsl-install.log`  — early attempt (may be empty)
-- `wsl-install.err`  — early attempt error log
+**Don't** edit the wrappers in `C:\Users\Shadow\bin\` — they're one-line stubs that forward to the canonical copies in WSL. Edit canonical files in `/root/repos/free-claude-code-setup/bin/`, commit, done.
+
+---
+
+## Key configuration
+
+### Proxy `.env` (`/root/repos/free-claude-code/.env`, perms 600, gitignored)
+
+```
+NVIDIA_NIM_API_KEY="nvapi-..."          # required, from build.nvidia.com
+MODEL_OPUS="nvidia_nim/z-ai/glm4.7"
+MODEL_SONNET="nvidia_nim/moonshotai/kimi-k2-thinking"
+MODEL_HAIKU="nvidia_nim/stepfun-ai/step-3.5-flash"
+MODEL="nvidia_nim/z-ai/glm4.7"          # fallback for unmapped requests
+ENABLE_THINKING=true
+ANTHROPIC_AUTH_TOKEN="freecc"           # what clients send as their fake Anthropic auth
+PROVIDER_RATE_LIMIT=40
+PROVIDER_RATE_WINDOW=60
+PROVIDER_MAX_CONCURRENCY=5
+```
+
+See `env.template` in this repo for the full defaulted template.
+
+### Swapping models
+
+Catalog: `/root/repos/free-claude-code/nvidia_nim_models.json`. Notable:
+
+| Tier | Candidate IDs | Notes |
+|---|---|---|
+| Heavy / Opus | `z-ai/glm4.7`, `z-ai/glm5`, `moonshotai/kimi-k2.5` | Kimi K2.5 is strongest for agent tool use per NIM benchmarks |
+| Balanced / Sonnet | `moonshotai/kimi-k2-thinking`, `z-ai/glm-5.1` | "-thinking" variants expose reasoning traces |
+| Fast / Haiku | `stepfun-ai/step-3.5-flash`, `minimaxai/minimax-m2.7` | Pick for quick turn-around; tool reliability weaker |
+| Coding-specialized | `qwen/qwen3-coder-480b-a35b-instruct` | Large MoE; slower but code-tuned |
+
+After editing `.env`: `stop-nim-proxy && claude-nim ...` (next invocation starts fresh).
+
+### Rate limit behaviour
+
+40 req/min is a hard ceiling from NVIDIA. The proxy mirrors it client-side (`PROVIDER_RATE_LIMIT`/`PROVIDER_RATE_WINDOW`). Each tool call from Claude Code counts as one request. Heavy agent loops (`/ultrareview`, parallel subagents) will hit 429s. Client retries with exponential backoff, no data loss, just latency.
+
+---
+
+## Machine-specific quirks (this host)
+
+Facts about this physical/virtual machine that aren't derivable from reading any code:
+
+1. **Shadow PC (Blade cloud desktop).** `Manufacturer: Blade`, `Model: Shadow Computer`. AMD EPYC 7543P visible to guest, but no SLAT passthrough. Consequence: no WSL2, no Hyper-V, no Docker-for-Windows. Only WSL1 works.
+
+2. **Tailscale is active on the host.** WSL by default inherits Windows DNS config, which points at Tailscale's MagicDNS placeholders (`fec0:0:0:ffff::1-3`, non-routable from inside WSL). Fix, already applied:
+    - `/etc/wsl.conf`:
+      ```
+      [network]
+      generateResolvConf = false
+      ```
+    - `/etc/resolv.conf` manually written with `1.1.1.1 / 1.0.0.1 / 8.8.8.8`, then `chattr +i` so WSL respawn can't clobber it.
+
+3. **systemd is broken** in WSL1 (expected — no cgroup namespaces). The systemd package is held via `apt-mark hold systemd packagekit libnss-systemd` so `apt upgrade` doesn't keep failing on reconfigure. No consequence for the proxy (doesn't need systemd).
+
+4. **Windows PATH leaks into WSL.** Every WSL login inherits `/mnt/c/...` paths, including `/mnt/c/Program Files/nodejs`. That Windows node.exe prints "WSL 1 is not supported" when accidentally invoked from bash and has confused shell scripts during setup. Harmless but noisy. Linux-side nvm + node 20 exists at `~/.nvm/versions/node/v20.20.2/` in case it's ever needed (it isn't for this project).
+
+5. **Python 3.14 is uv-managed, not system.** Ubuntu 24.04 ships Python 3.12. The proxy's `pyproject.toml` requires `>=3.14`, so `uv python install 3.14` was run once. `uv sync` picks it up automatically. **Do not replace with `sudo apt install python3.14` or the deadsnakes PPA** — uv's managed install is what's locked in uv.lock's venv.
+
+6. **Root user, no normal user.** Ubuntu was installed with `--no-launch` to skip the interactive first-run user creation. Everything runs as root. If you want a normal user later: `adduser shadow && usermod -aG sudo shadow && ubuntu config --default-user shadow`.
+
+---
+
+## Cold-start rebuild
+
+If this PC gets wiped or you're doing the same thing on another Shadow-class machine. Expected time: ~30 min, one reboot.
+
+1. **Enable Windows features** (admin PowerShell):
+   ```
+   dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart
+   dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart
+   ```
+   **Reboot.** (VMP activation requires it.)
+
+2. **Install Ubuntu as WSL1** (Shadow has no nested virt, WSL2 will fail):
+   ```
+   wsl --set-default-version 1
+   wsl --install -d Ubuntu --no-launch --web-download
+   ```
+
+3. **Fix DNS** (Tailscale quirk) — from Windows shell:
+   ```
+   wsl -d Ubuntu -u root -- bash -c "cat > /etc/wsl.conf <<EOF
+   [network]
+   generateResolvConf = false
+   EOF
+   rm -f /etc/resolv.conf
+   printf 'nameserver 1.1.1.1\\nnameserver 1.0.0.1\\nnameserver 8.8.8.8\\n' > /etc/resolv.conf
+   chattr +i /etc/resolv.conf"
+   wsl --shutdown
+   ```
+
+4. **Base toolchain** (inside WSL as root):
+   ```
+   apt-get update && apt-get install -y python3 python3-pip python3-venv git curl build-essential
+   apt-mark hold systemd packagekit libnss-systemd  # stop noisy upgrade failures
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+   ```
+
+5. **Clone the proxy and setup repo:**
+   ```
+   mkdir -p /root/repos && cd /root/repos
+   git clone https://github.com/Alishahryar1/free-claude-code.git
+   # Clone this setup repo (replace with your fork/mirror if hosted):
+   git clone <this-repo-url> free-claude-code-setup
+   ```
+
+6. **Configure `.env`:**
+   ```
+   cd /root/repos/free-claude-code
+   cp /root/repos/free-claude-code-setup/env.template .env
+   chmod 600 .env
+   # Edit .env: paste NVIDIA_NIM_API_KEY (get it at build.nvidia.com/settings/api-keys)
+   ```
+
+7. **Install Python + deps:**
+   ```
+   /root/.local/bin/uv python install 3.14
+   cd /root/repos/free-claude-code && /root/.local/bin/uv sync
+   ```
+
+8. **Wire launchers to PATH:**
+   ```
+   ln -sf /root/repos/free-claude-code-setup/bin/claude-nim     /usr/local/bin/claude-nim
+   ln -sf /root/repos/free-claude-code-setup/bin/stop-nim-proxy /usr/local/bin/stop-nim-proxy
+   ```
+   From Windows PowerShell (non-admin):
+   ```
+   mkdir C:\Users\<you>\bin -Force
+   # Copy the two .bat stubs from \\wsl$\Ubuntu\root\repos\free-claude-code-setup\bin\
+   # Add to User PATH:
+   $p = [Environment]::GetEnvironmentVariable('Path','User')
+   if (($p -split ';') -notcontains "C:\Users\<you>\bin") {
+     [Environment]::SetEnvironmentVariable('Path',"$p;C:\Users\<you>\bin",'User')
+   }
+   ```
+
+9. **Smoke test:**
+   ```
+   curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8082/     # expect: 000 (proxy not running yet)
+   claude-nim --version                                                # starts proxy, runs claude
+   curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8082/     # expect: 401 (proxy up)
+   ```
+
+---
+
+## Troubleshooting
+
+**`claude-nim` says proxy didn't come up in 20s.**
+Check `tail -30 /tmp/nim-proxy.log`. Common causes:
+- `.env` missing or malformed — regenerate from `env.template`
+- `NVIDIA_NIM_API_KEY` empty or expired — regenerate at build.nvidia.com
+- Python 3.14 missing — `/root/.local/bin/uv python install 3.14`
+- Deps unsynced after an upstream `free-claude-code` pull — `cd /root/repos/free-claude-code && uv sync`
+
+**Claude Code gets 429 errors / long pauses.**
+You hit the 40/min rate limit. Not fixable — it's a NIM cap. Reduce `PROVIDER_MAX_CONCURRENCY` in `.env` for smoother pacing. Fall back to real Claude for heavy agent runs.
+
+**DNS stops working in WSL after Windows/Tailscale update.**
+If Tailscale gets reinstalled or WSL is reregistered, `/etc/resolv.conf` may regen despite `chattr +i`. Redo step 3 of the cold-start.
+
+**`claude-nim.bat` on Windows fails with "system cannot find the path".**
+`\\wsl$\Ubuntu\...` works only when WSL is running. `wsl -l -v` to confirm Ubuntu exists and is Stopped/Running. If Stopped, running `claude-nim.bat` kicks it up anyway; should be fine.
+
+**Model response quality feels off vs. real Claude.**
+Expected. Open-weight models (GLM/Kimi/Qwen) are weaker on tool-calling fidelity and long-context coherence. For casual interactive work you won't notice; for agentic workflows, keep real Claude as the primary.
+
+**Switch to a different provider (OpenRouter, DeepSeek, LM Studio).**
+Edit `.env`, set that provider's API key, change `MODEL_*` values to `open_router/...` / `deepseek/...` / `lmstudio/...`. Restart proxy. See `/root/repos/free-claude-code/README.md` upstream for provider-specific prefix conventions.
+
+---
+
+## History / setup narrative
+
+Original bring-up was a single session on 2026-04-23. Preserved here for reference — future-you may find one of these gotchas again on a similar host.
+
+### What worked on the first try
+- Ubuntu base install via `wsl --install`
+- `uv python install 3.14` + `uv sync`
+- Model mapping + `.env` configuration
+- Port forwarding (WSL1 shares Windows network namespace, zero config needed)
+
+### What blocked us (in order of discovery)
+1. **`wsl --install` refused without VMP.** Fix: DISM enable VirtualMachinePlatform + reboot.
+2. **Still refused after VMP was on.** Root cause: Shadow PC doesn't expose SLAT to the guest → WSL2 impossible on this host. Fix: `wsl --set-default-version 1` + re-install as WSL1.
+3. **DNS didn't resolve inside WSL.** Root cause: Tailscale on the host left WSL with fec0:: placeholder DNS. Fix: disable `generateResolvConf`, hand-write `/etc/resolv.conf`, `chattr +i`.
+4. **`apt upgrade` failed configuring systemd.** WSL1 can't run systemd. Fix: `apt-mark hold systemd packagekit libnss-systemd`. Harmless going forward.
+5. **`npm install -g @anthropic-ai/claude-code` refused WSL1.** Decision: don't install Linux Claude Code at all; use Windows-native, which already exists.
+6. **Node 24 LTS crashes on WSL1.** Only relevant if you want Linux-side node; we don't for this project. Workaround: `nvm install 20`.
+7. **`ss -ltn` in WSL1 is per-session** — couldn't see the proxy started in another shell. Fix: use curl HTTP probe for the `listening()` check instead (see `bin/claude-nim`).
+8. **PowerShell's `&` operator mangled `setlocal` in the .bat.** Fix: removed `setlocal EnableDelayedExpansion`, rewrote counter loop as `for /l`.
+
+### What we explicitly didn't do and why
+- **Didn't install Claude Code in WSL.** Upstream refuses WSL1; Windows-native works fine via localhost. Don't retry this on Shadow-class hosts.
+- **Didn't enable Hyper-V.** No effect — SLAT still missing.
+- **Didn't create a non-root Linux user.** Everything's root; fine for a local dev VM. Add one later if you want `sudo` semantics.
+- **Didn't set env vars globally in Windows.** Per-shell scoping via the launcher keeps the paid Claude Code session on this machine uncontaminated.
