@@ -98,6 +98,64 @@ C:\Users\Shadow\bin\stop-nim-proxy.bat  ← thin wrapper
 
 ---
 
+## Verification / health checks
+
+There are three distinct "is it working" questions, each with its own check. Run them in this order when anything feels off.
+
+### 1. Is the proxy running? (fastest, no API usage)
+
+```
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8082/
+```
+
+- `401` → proxy is up (it's rejecting an anonymous request, which is correct)
+- `000` → nothing listening. Run `claude-nim --version` to start it, or check `tail /tmp/nim-proxy.log`
+- Anything else → proxy is up but misbehaving; see Troubleshooting
+
+Equivalent from inside the launcher: `bin/claude-nim`'s `listening()` function uses this same probe.
+
+### 2. Is the cold-start path healthy? (what `claude-nim --version` actually proves)
+
+Running `claude-nim --version` from a **brand-new** shell — one opened after PATH was last modified — exercises the full wiring without spending an API request:
+
+| Stage | What it proves |
+|---|---|
+| Shell resolves `claude-nim` | New User PATH picked up correctly (Windows) or `/usr/local/bin` on PATH (WSL) |
+| Launcher's `listening()` check runs | curl is available, port 8082 accessible from this shell |
+| If proxy was down, launcher starts it | `uv run uvicorn` works, `.env` loads cleanly, Python 3.14 still installed |
+| `claude.exe` is found and executes | Windows Claude Code install is intact; `claude.cmd` path correct |
+| `--version` prints "2.1.x (Claude Code)" | env-var overrides didn't break anything pre-model-call |
+
+If `claude-nim --version` prints a version line, **everything except the actual model call has been verified**. That's typically what you want — it doesn't burn a request.
+
+**Why from a _new_ shell?** Windows stores User PATH in the registry. Live shells cached their PATH at start. Adding `C:\Users\Shadow\bin` to PATH only takes effect for processes spawned *after* the change. The setup session did that change, but any already-open shell still has the old PATH and won't find `claude-nim`. A fresh shell is the honest test.
+
+### 3. Does end-to-end inference work? (spends 1 request against the 40/min cap)
+
+```
+claude-nim -p "say PONG and nothing else" --model claude-haiku-4-20250514
+```
+
+- Expected: `PONG` somewhere in the output
+- Uses Haiku-tier (mapped to `stepfun-ai/step-3.5-flash`) — fastest and cheapest signal
+- If this returns a coherent response: **proxy → NIM → model → client → stdout round-trip is healthy**
+
+Failure modes:
+- `Missing API key` in response → `.env` auth token doesn't match what the launcher sends (`freecc`)
+- 502 / timeout → NIM API is down, or `NVIDIA_NIM_API_KEY` expired/revoked — regenerate at build.nvidia.com
+- Garbled/hallucinated output → model got the prompt but misbehaved; try `--model claude-opus-4-20250514` (routes to glm4.7)
+- `429` or retry loop → you hit the 40/min rate limit
+
+### Periodic checks (if you want to be proactive)
+
+None strictly required — the system is essentially stateless once set up. But if you like dashboards:
+
+- **Rate usage:** NVIDIA doesn't expose per-key usage counters on the free tier. Proxy log (`tail -f /tmp/nim-proxy.log`) shows each request; eyeball it if you're curious.
+- **Model availability:** NIM occasionally deprecates models. If `MODEL_OPUS` etc. start 404ing, check `/root/repos/free-claude-code/nvidia_nim_models.json` against the current catalog at build.nvidia.com.
+- **Proxy uptime:** `wsl --shutdown` or a Windows reboot will kill it; launcher auto-restarts on next `claude-nim` invocation.
+
+---
+
 ## Key configuration
 
 ### Proxy `.env` (`/root/repos/free-claude-code/.env`, perms 600, gitignored)
