@@ -10,7 +10,12 @@ LOG=/tmp/nim-proxy.log
 CLAUDE_EXE=/mnt/c/Users/Shadow/AppData/Roaming/npm/claude.cmd
 
 listening() {
-    ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE ":${PORT}\$"
+    # WSL1 /proc/net/tcp is per-session, so `ss` misses sockets from other WSL
+    # shells. Use an HTTP probe — the proxy replies 401 to anonymous GETs on /.
+    local code
+    code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 2 \
+        "http://localhost:${PORT}/" 2>/dev/null) || code="000"
+    [ "$code" != "000" ] && [ -n "$code" ]
 }
 
 if listening; then

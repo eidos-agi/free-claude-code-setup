@@ -4,31 +4,26 @@ set -eu
 
 PORT=${NIM_PROXY_PORT:-8082}
 
-pids_on_port() {
-    ss -ltnp 2>/dev/null \
-        | awk -v p=":${PORT}" '$4 ~ p"$" {print $NF}' \
-        | grep -oE 'pid=[0-9]+' \
-        | cut -d= -f2 \
-        | sort -u
+reachable() {
+    local code
+    code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 2 \
+        "http://localhost:${PORT}/" 2>/dev/null) || code="000"
+    [ "$code" != "000" ] && [ -n "$code" ]
 }
 
-PIDS=$(pids_on_port)
-if [ -z "${PIDS}" ]; then
-    echo "[stop-nim-proxy] nothing listening on :${PORT}" >&2
+if ! reachable; then
+    echo "[stop-nim-proxy] nothing reachable on :${PORT}" >&2
     exit 0
 fi
 
-for pid in ${PIDS}; do
-    echo "[stop-nim-proxy] TERM pid ${pid}"
-    kill "${pid}" 2>/dev/null || true
-done
-
+# WSL1's /proc/net is per-session, so we can't reliably find the proxy's PID from
+# here. The surest portable way to stop it is to shut WSL down entirely —
+# Windows owns the socket, WSL owns the process, and `wsl --shutdown` halts both.
+echo "[stop-nim-proxy] shutting down WSL to stop the proxy..."
+/mnt/c/Windows/System32/wsl.exe --shutdown 2>/dev/null || wsl.exe --shutdown
 sleep 1
-REMAINING=$(pids_on_port)
-if [ -n "${REMAINING}" ]; then
-    echo "[stop-nim-proxy] port still busy — forcing KILL" >&2
-    for pid in ${REMAINING}; do
-        kill -9 "${pid}" 2>/dev/null || true
-    done
+if reachable; then
+    echo "[stop-nim-proxy] WARN: proxy still reachable after WSL shutdown" >&2
+    exit 1
 fi
 echo "[stop-nim-proxy] done"
