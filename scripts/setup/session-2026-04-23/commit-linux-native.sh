@@ -1,6 +1,6 @@
 #!/bin/bash
 set -eu
-REPO=/root/repos/free-claude-code-setup
+REPO=$HOME/repos/free-claude-code-setup
 SRC=/mnt/c/Users/Shadow/repos/free-claude-code-setup/new-bin
 
 # Install updated launcher + new CLAUDE.md + check-nim + corrected PLAN.md + logs
@@ -32,8 +32,8 @@ to the proxy produces LINUX_OK response and a \`POST /v1/messages?beta=true
 200 OK\` entry in /tmp/nim-proxy.log.
 
 Changes:
-- bin/claude-nim: prefer /root/.nvm/versions/node/*/bin/claude when
-  present, with isolated HOME=/root/claude-nim-home; fall back to
+- bin/claude-nim: prefer $HOME/.nvm/versions/node/*/bin/claude when
+  present, with isolated HOME=$HOME/claude-nim-home; fall back to
   Windows claude.cmd via interop otherwise.
 - CLAUDE.md (new, at repo root): briefing doc auto-loaded when a
   Claude session cwd's into this repo. Points to PLAN.md for detail,

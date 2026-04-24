@@ -1,6 +1,6 @@
 #!/bin/bash
 set -e
-DEST=/root/repos/free-claude-code-setup
+DEST=$HOME/repos/free-claude-code-setup
 SRC=/mnt/c/Users/Shadow/repos/free-claude-code-setup
 
 mkdir -p "$DEST"

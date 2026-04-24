@@ -101,6 +101,6 @@ Upstream tracking: [anthropics/claude-code#38788](https://github.com/anthropics/
 - `claude --version` → `2.1.81 (Claude Code)` runs cleanly
 - `claude -p "..." --model claude-haiku-4-20250514` with `ANTHROPIC_BASE_URL=http://localhost:8082` → response returns, proxy log shows `POST /v1/messages?beta=true 200 OK` confirming routing
 
-**Launcher updated:** `bin/claude-nim` now prefers the Linux-native claude at `/root/.nvm/versions/node/*/bin/claude` and only falls back to `/mnt/c/Users/Shadow/AppData/Roaming/npm/claude.cmd` via Windows interop if Linux install is absent. HOME is isolated to `/root/claude-nim-home/` to prevent a future Linux OAuth login from polluting the proxy-routing path, symmetric to the USERPROFILE isolation on the Windows side.
+**Launcher updated:** `bin/claude-nim` now prefers the Linux-native claude at `~/.nvm/versions/node/*/bin/claude` and only falls back to `/mnt/c/Users/Shadow/AppData/Roaming/npm/claude.cmd` via Windows interop if Linux install is absent. HOME is isolated to `~/claude-nim-home/` to prevent a future Linux OAuth login from polluting the proxy-routing path, symmetric to the USERPROFILE isolation on the Windows side.
 
 **Lesson for future-me:** When a Linux binary says "Exec format error" on WSL1, don't conclude "this won't work at all." Check version history — the regression may be recent and older versions may install cleanly.

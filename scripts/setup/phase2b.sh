@@ -5,19 +5,19 @@ cd /root
 
 echo "=== HOME=$HOME ==="
 echo "=== nvm dir contents ==="
-ls -la /root/.nvm/versions/node/ 2>&1
+ls -la $HOME/.nvm/versions/node/ 2>&1
 
 echo "=== removing node 24 ==="
-rm -rf /root/.nvm/versions/node/v24.15.0
-ls -la /root/.nvm/versions/node/ 2>&1
+rm -rf $HOME/.nvm/versions/node/v24.15.0
+ls -la $HOME/.nvm/versions/node/ 2>&1
 
 echo "=== explicit NVM_DIR ==="
-export NVM_DIR=/root/.nvm
+export NVM_DIR=$HOME/.nvm
 echo "NVM_DIR=$NVM_DIR"
 ls "$NVM_DIR/nvm.sh"
 
 echo "=== sourcing nvm ==="
-. /root/.nvm/nvm.sh
+. $HOME/.nvm/nvm.sh
 echo "type nvm:"
 type nvm | head -2
 
@@ -32,6 +32,6 @@ npm --version
 echo "=== install claude-code (best effort) ==="
 npm install -g @anthropic-ai/claude-code 2>&1 | tail -10
 which claude
-ls /root/.nvm/versions/node/*/bin/claude 2>&1 || echo "no linux claude installed"
+ls $HOME/.nvm/versions/node/*/bin/claude 2>&1 || echo "no linux claude installed"
 
 echo "=== DONE ==="

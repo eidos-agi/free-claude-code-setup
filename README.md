@@ -2,7 +2,7 @@
 
 Machine-local setup that lets Claude Code run against NVIDIA NIM's free tier (40 req/min, ~0 cost) via a reverse proxy inside WSL.
 
-**Canonical location:** `/root/repos/free-claude-code-setup/` inside WSL Ubuntu.
+**Canonical location:** `~/repos/free-claude-code-setup/` inside WSL Ubuntu.
 (Windows accesses via `\\wsl$\Ubuntu\root\repos\free-claude-code-setup\`.)
 
 ---
@@ -30,7 +30,7 @@ stop-nim-proxy
 ## What's where
 
 ```
-/root/repos/free-claude-code-setup/
+~/repos/free-claude-code-setup/
 ├── PLAN.md                Full write-up: architecture, WSL1 decision, Tailscale DNS fix, etc.
 ├── README.md              This file.
 ├── env.template           Template for the proxy's .env (key blank — fill in per-machine).
@@ -41,16 +41,16 @@ stop-nim-proxy
 │   └── stop-nim-proxy.bat cmd.exe stopper (Windows).
 └── scripts/setup/         Historical bring-up scripts (phase2.sh, etc.).
 
-/root/repos/free-claude-code/   ← the actual proxy (upstream, git-cloned)
+~/repos/free-claude-code/   ← the actual proxy (upstream, git-cloned)
 ```
 
-The proxy's `.env` lives in `/root/repos/free-claude-code/.env` and is **gitignored** (contains the NIM key). Re-derive from `env.template` on a new machine.
+The proxy's `.env` lives in `~/repos/free-claude-code/.env` and is **gitignored** (contains the NIM key). Re-derive from `env.template` on a new machine.
 
 ---
 
 ## Changing models
 
-Edit `/root/repos/free-claude-code/.env`, change any of:
+Edit `~/repos/free-claude-code/.env`, change any of:
 
 ```
 MODEL_OPUS="nvidia_nim/z-ai/glm4.7"
@@ -58,7 +58,7 @@ MODEL_SONNET="nvidia_nim/moonshotai/kimi-k2-thinking"
 MODEL_HAIKU="nvidia_nim/stepfun-ai/step-3.5-flash"
 ```
 
-Full list: `/root/repos/free-claude-code/nvidia_nim_models.json`. Restart proxy: `stop-nim-proxy && claude-nim ...`.
+Full list: `~/repos/free-claude-code/nvidia_nim_models.json`. Restart proxy: `stop-nim-proxy && claude-nim ...`.
 
 ---
 

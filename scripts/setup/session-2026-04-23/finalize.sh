@@ -1,6 +1,6 @@
 #!/bin/bash
 set -eu
-REPO=/root/repos/free-claude-code-setup
+REPO=$HOME/repos/free-claude-code-setup
 WINDOWS=/mnt/c/Users/Shadow/repos/free-claude-code-setup
 NEW=$WINDOWS/new-bin
 

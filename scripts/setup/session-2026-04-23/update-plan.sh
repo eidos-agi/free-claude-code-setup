@@ -1,6 +1,6 @@
 #!/bin/bash
 set -eu
-REPO=/root/repos/free-claude-code-setup
+REPO=$HOME/repos/free-claude-code-setup
 SRC=/mnt/c/Users/Shadow/repos/free-claude-code-setup/new-bin
 
 cp "$SRC/PLAN.md" "$REPO/PLAN.md"

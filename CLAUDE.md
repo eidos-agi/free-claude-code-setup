@@ -49,12 +49,12 @@ If you see the banner showing "`<email>'s Organization`" or the model response n
 - Direct curl health probe: `curl -sS -o /dev/null -w "%{http_code}\n" http://localhost:8082/` → 401 means up
 
 **Changing models:**
-- Edit `/root/repos/free-claude-code/.env` (NOT this repo's env.template — that's the template; the live `.env` lives in the upstream proxy repo)
+- Edit `~/repos/free-claude-code/.env` (NOT this repo's env.template — that's the template; the live `.env` lives in the upstream proxy repo)
 - Restart proxy: `stop-nim-proxy && claude-nim ...`
-- Available models: `/root/repos/free-claude-code/nvidia_nim_models.json`
+- Available models: `~/repos/free-claude-code/nvidia_nim_models.json`
 
 **NIM API key:**
-- Stored in `/root/repos/free-claude-code/.env` as `NVIDIA_NIM_API_KEY=nvapi-...`
+- Stored in `~/repos/free-claude-code/.env` as `NVIDIA_NIM_API_KEY=nvapi-...`
 - Gitignored. Key is 68-char `nvapi-` prefix. Regenerate at build.nvidia.com/settings/api-keys if revoked.
 
 ## What NOT to do
