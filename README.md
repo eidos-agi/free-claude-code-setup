@@ -3,7 +3,42 @@
 Machine-local setup that lets Claude Code run against NVIDIA NIM's free tier (40 req/min, ~0 cost) via a reverse proxy inside WSL.
 
 **Canonical location:** `~/repos/free-claude-code-setup/` inside WSL Ubuntu.
-(Windows accesses via `\\wsl$\Ubuntu\root\repos\free-claude-code-setup\`.)
+(Windows accesses via `\\wsl.localhost\Ubuntu\home\dshanklin\repos\free-claude-code-setup\`.)
+
+---
+
+## Start here
+
+**What this is:** a launcher (`claude-nim`) that routes Claude Code through a local proxy to NVIDIA NIM's free-tier open-weight models instead of Anthropic. You get Claude Code's UX at $0/month, at the cost of some model quality.
+
+**The three commands that matter:**
+```bash
+bash bootstrap.sh                         # one-time install on a fresh user/WSL
+./new-bin/validations/run-all.sh          # prove the setup still works (~4 min)
+claude-nim [args]                         # daily use — same as 'claude' but routed
+```
+
+**The one gotcha that bites:** on WSL1, only `@anthropic-ai/claude-code@2.1.81` runs. 2.1.83+ ships as a Bun-compiled ELF whose segment alignment WSL1 rejects (`Exec format error`). `bootstrap.sh` pins it. Don't `npm update`.
+
+**Current status:** see `STATUS.md`. Open questions tracked in `OPEN-QUESTIONS.md`. Why-we-did-it decisions in `ADR/`.
+
+---
+
+## Data flow
+
+```
+claude-code CLI  ─►  bin/claude-nim   ─►  localhost:8082  ─►  integrate.api.nvidia.com
+                     • clear ANTHROPIC_API_KEY    (FastAPI proxy)    (NVIDIA NIM)
+                     • isolate HOME                • translates                │
+                     • set BASE_URL → proxy          Anthropic⇄OpenAI          ▼
+                     • launch claude 2.1.81        • logs /v1/messages    open-weight
+                                                     to ~/.cache/          models:
+                                                     nim-proxy-usage       glm4.7 (Opus)
+                                                     .jsonl                kimi-k2-thinking
+                                                                           step-3.5-flash
+```
+
+The launcher is the **enforcement point** — if you use it, the three auth pitfalls (cached OAuth, cached account metadata, `ANTHROPIC_API_KEY` precedence) cannot leak to Anthropic. Bare `claude` bypasses all of this.
 
 ---
 

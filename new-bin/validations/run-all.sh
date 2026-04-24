@@ -64,4 +64,19 @@ echo "summary (logs: $LOG_DIR):"
 cat "$LOG_DIR/summary.txt" 2>/dev/null | sed 's/^/  /'
 echo "overall exit: $OVERALL"
 echo "========================================================"
+
+# Append a row to STATUS.md on pass (self-updating status ledger)
+if [ "$OVERALL" -eq 0 ]; then
+  REPO_ROOT="$(cd "$DIR/../.." && pwd)"
+  STATUS="$REPO_ROOT/STATUS.md"
+  if [ -f "$STATUS" ] && [ -d "$REPO_ROOT/.git" ]; then
+    TS=$(date -u +"%Y-%m-%d %H:%M:%S")
+    COMMIT=$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null)
+    V5_NOTE=""
+    [ "$INCLUDE_V5" -eq 1 ] && V5_NOTE=" +V5"
+    echo "| $TS | $COMMIT  | V1-V4$V5_NOTE PASS | auto | Auto-appended by run-all.sh |" >> "$STATUS"
+    echo "[run-all] appended pass row to STATUS.md"
+  fi
+fi
+
 exit "$OVERALL"
