@@ -62,6 +62,9 @@ def summarize(entries: list[dict], since: datetime | None = None) -> dict:
     status_counts = Counter()
     model_counts = Counter()
     durs = []
+    input_tokens_total = 0
+    output_tokens_total = 0
+    requests_with_tokens = 0
     for e in filtered:
         day = e["_ts"].astimezone(timezone.utc).strftime("%Y-%m-%d")
         by_day[day] += 1
@@ -69,6 +72,14 @@ def summarize(entries: list[dict], since: datetime | None = None) -> dict:
         model_counts[e.get("model") or "<unknown>"] += 1
         if isinstance(e.get("dur_ms"), int):
             durs.append(e["dur_ms"])
+        it = e.get("input_tokens")
+        ot = e.get("output_tokens")
+        if isinstance(it, int) or isinstance(ot, int):
+            requests_with_tokens += 1
+            if isinstance(it, int):
+                input_tokens_total += it
+            if isinstance(ot, int):
+                output_tokens_total += ot
 
     return {
         "total": len(filtered),
@@ -78,6 +89,10 @@ def summarize(entries: list[dict], since: datetime | None = None) -> dict:
         "dur_ms_p50": pctile(durs, 50),
         "dur_ms_p95": pctile(durs, 95),
         "dur_ms_avg": int(sum(durs) / len(durs)) if durs else 0,
+        "input_tokens": input_tokens_total,
+        "output_tokens": output_tokens_total,
+        "total_tokens": input_tokens_total + output_tokens_total,
+        "requests_with_tokens": requests_with_tokens,
     }
 
 
@@ -91,6 +106,12 @@ def print_human(summary: dict, label: str) -> None:
     if summary.get("model"):
         model_str = ", ".join(f"{k}:{v}" for k, v in summary["model"].items())
         print(f"  by model       : {model_str}")
+    # Token totals (from NVIDIA's usage counts in the response stream)
+    if summary.get("total_tokens", 0) > 0 or summary.get("requests_with_tokens", 0) > 0:
+        covered = summary.get("requests_with_tokens", 0)
+        total_req = summary["total"]
+        cov_pct = int(100 * covered / total_req) if total_req else 0
+        print(f"  NVIDIA tokens  : {summary['input_tokens']:>7,} in + {summary['output_tokens']:>7,} out = {summary['total_tokens']:>7,} total ({covered}/{total_req} reqs = {cov_pct}% covered)")
     if summary["by_day"]:
         print("  by day:")
         for day, n in summary["by_day"].items():
