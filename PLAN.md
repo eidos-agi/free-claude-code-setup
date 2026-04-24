@@ -231,6 +231,10 @@ Facts about this physical/virtual machine that aren't derivable from reading any
 
 If this PC gets wiped or you're doing the same thing on another Shadow-class machine. Expected time: ~30 min, one reboot.
 
+**Fast path — after WSL+Ubuntu exist:** run `bash bootstrap.sh` from this repo. It collapses steps 4-13 into one idempotent script. Pre-provide `NIM_API_KEY=nvapi-...` or it prompts. Verified end-to-end in `new-bin/validations/05-reproducibility.sh` (creates a scratch user, runs bootstrap, confirms claude-nim works).
+
+**Steps 1-3 (still manual)** — WSL enable + DNS fix are machine-level prerequisites bootstrap.sh can't do:
+
 1. **Enable Windows features** (admin PowerShell):
    ```
    dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart

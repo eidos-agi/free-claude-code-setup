@@ -36,6 +36,19 @@ Claude Code's auth-precedence rules silently route around `ANTHROPIC_BASE_URL` u
 
 If you see the banner showing "`<email>'s Organization`" or the model response nailing Claude-4.6-specific knowledge cutoffs effortlessly: **the proxy is being bypassed**. Run `check-nim` to verify.
 
+## Bootstrap + regression validation
+
+**Fresh machine install:** `bash bootstrap.sh` from this repo. Pre-provide `NIM_API_KEY=nvapi-...` to skip the interactive prompt. Runs ~60s on a machine that already has systemd held + baseline packages; ~3 min if it has to apt-install.
+
+**Regression tests:** `new-bin/validations/run-all.sh` — sequences 5 always-on validations, bails on first fail:
+- `01-tool-use.sh` — claude-nim can drive Read/Edit/Bash through the proxy
+- `02-no-leak.sh` — 4 misuse scenarios (polluted env, cached OAuth, cold proxy) all land at proxy, zero Anthropic TCP hits
+- `03-rate-limit.sh` — 60-request burst: ≥40 succeed, proxy survives, 429s clean
+- `04-recovery.sh` — mid-session SIGKILL + full proxy purge both self-heal on next invocation
+- `05-reproducibility.sh` — runs bootstrap.sh on a scratch user, confirms end-to-end works (needs sudo; pass `--include-v5` to run-all.sh)
+
+Run after any config change to confirm the "always-on" invariants still hold.
+
 ## How to operate
 
 **Daily use:**
