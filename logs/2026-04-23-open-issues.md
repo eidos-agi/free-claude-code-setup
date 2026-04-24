@@ -62,3 +62,26 @@ The minimized "NIM Proxy" taskbar window is non-obvious; users might assume it c
 1. User runs `stop-nim-proxy && claude-nim`, chats for 2-3 turns, then from a Windows shell runs `wsl cat /tmp/nim-proxy.log | tail -40`. Count of `POST /v1/messages` lines tells us everything. Resolves #4.
 2. If #4 settles as H2 (bypass still happening): investigate `.claude.json` fields like `apiKey`, `oauth_account`, hidden tokens. Likely need to also clear `%APPDATA%\Claude` or check if Claude Code reads from `%LOCALAPPDATA%\Claude` in addition to `%USERPROFILE%\.claude\`.
 3. If #4 settles as H1: update PLAN.md to note "model impersonation is expected and convincing — don't be alarmed by Claude-branded responses, check `/tmp/nim-proxy.log` for proof-of-route if uncertain."
+
+---
+
+## Resolution — 2026-04-23 (updated)
+
+**#4 is settled as H1 (model impersonation), with a caveat that required an additional fix.**
+
+Test that settled it: ran `claude -p` from PowerShell with these env vars set explicitly:
+```powershell
+$env:USERPROFILE         = 'C:\Users\Shadow\AppData\Local\claude-nim-profile'
+$env:ANTHROPIC_BASE_URL  = 'http://localhost:8082'
+$env:ANTHROPIC_AUTH_TOKEN = 'freecc'
+$env:ANTHROPIC_API_KEY   = ''        # <-- the missing ingredient
+claude -p 'Answer ONLY with the word OK.' --model claude-haiku-4-20250514
+```
+
+Proxy log after: two `POST /v1/messages?beta=true HTTP/1.1" 200 OK` entries (source ports 59358, 59360). The proxy was in the path.
+
+**Root cause of apparent bypass:** Claude Code's auth precedence prefers `ANTHROPIC_API_KEY` over `ANTHROPIC_AUTH_TOKEN` — even when `ANTHROPIC_API_KEY` is *defined but empty* in the inherited environment. If the parent shell has `ANTHROPIC_API_KEY` undefined (as is the default on a fresh PC), things work. But some process in the chain (maybe Claude Code's own internals, maybe npm, maybe cmd.exe) was evaluating "if ANTHROPIC_API_KEY is set in env → use it", triggering false-positive and silently falling back to the cached OAuth. Explicitly writing `ANTHROPIC_API_KEY=` (empty) in the launcher defeats this.
+
+**Launchers updated** (follow-up commit): both `bin/claude-nim.bat` and `bin/claude-nim` now explicitly set `ANTHROPIC_API_KEY=""` as a belt-and-suspenders override. Verified end-to-end through Windows PowerShell invocation, with proxy receiving `POST /v1/messages` during the session.
+
+**Lingering mystery:** why the earlier interactive-mode test (before this fix) appeared to chat and get responses despite the same bypass. Best guess: interactive Claude Code handles auth failures differently (maybe it has a cached OAuth in-process that survives a token check), whereas `-p` one-shot has stricter checks. Not worth further investigation — the launchers now force env-var-only auth.

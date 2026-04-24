@@ -40,6 +40,10 @@ fi
 
 export ANTHROPIC_AUTH_TOKEN=freecc
 export ANTHROPIC_BASE_URL="http://localhost:${PORT}"
+# Explicit empty ANTHROPIC_API_KEY — if set in the parent env (even to empty),
+# Claude Code prefers it over ANTHROPIC_AUTH_TOKEN and the proxy gets bypassed.
+# We explicitly unset-and-re-export empty to win the precedence check.
+export ANTHROPIC_API_KEY=""
 
 # Windows Claude Code reads stored OAuth creds from %USERPROFILE%\.claude\.credentials.json
 # which takes precedence over ANTHROPIC_BASE_URL when present (as is the case if you've

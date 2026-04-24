@@ -38,4 +38,8 @@ set USERPROFILE=%LOCALAPPDATA%\claude-nim-profile
 if not exist "%USERPROFILE%\.claude" mkdir "%USERPROFILE%\.claude" >nul 2>&1
 set ANTHROPIC_AUTH_TOKEN=freecc
 set ANTHROPIC_BASE_URL=http://localhost:8082
+REM Explicit empty ANTHROPIC_API_KEY — without this, Claude Code prefers any
+REM ambient ANTHROPIC_API_KEY (even a defined-but-weirdly-set one inherited
+REM from parent env) over ANTHROPIC_AUTH_TOKEN and bypasses the proxy.
+set ANTHROPIC_API_KEY=
 claude %*
