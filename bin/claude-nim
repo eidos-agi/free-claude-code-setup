@@ -10,7 +10,7 @@ PORT=${NIM_PROXY_PORT:-8082}
 PROXY_DIR=/root/repos/free-claude-code
 LOG=/tmp/nim-proxy.log
 # Prefer Linux-native claude (nvm-managed; pin 2.1.81 for WSL1 compat)
-LINUX_CLAUDE=$(ls -1 /root/.nvm/versions/node/*/bin/claude 2>/dev/null | head -1)
+LINUX_CLAUDE=$(ls -1 $HOME/.nvm/versions/node/*/bin/claude 2>/dev/null | head -1)
 WINDOWS_CLAUDE=/mnt/c/Users/Shadow/AppData/Roaming/npm/claude.cmd
 
 listening() {
@@ -51,7 +51,7 @@ export ANTHROPIC_API_KEY=""
 # --- Prefer Linux-native claude ---
 if [ -n "${LINUX_CLAUDE:-}" ] && [ -x "${LINUX_CLAUDE}" ]; then
     # Isolate HOME so any future OAuth login doesn't leak into .claude/.credentials.json
-    export HOME=/root/claude-nim-home
+    export HOME=$HOME/claude-nim-home
     mkdir -p "${HOME}/.claude"
     # claude's shebang is #!/usr/bin/env node — make sure nvm's node is first on PATH
     export PATH="$(dirname "${LINUX_CLAUDE}"):${PATH}"
