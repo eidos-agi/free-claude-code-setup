@@ -1,0 +1,74 @@
+# CLAUDE.md — instructions for future Claude Code sessions in this repo
+
+This file auto-loads when a Claude Code session has this repo as cwd. Read it first before acting.
+
+## What this repo is
+
+Local setup that lets **Claude Code** run against **NVIDIA NIM's free tier** (40 req/min, open-weight models like GLM 4.7 / Kimi K2 / Step 3.5) via a translating proxy. The user invokes everything through a `claude-nim` command.
+
+## Where to look (in priority order)
+
+1. **`PLAN.md`** — full operations manual. Architecture, file layout, cold-start rebuild, machine quirks, troubleshooting. If you're uncertain about anything, read it before guessing.
+2. **`README.md`** — one-page quick start.
+3. **`logs/`** — session notes. `2026-04-23-open-issues.md` records which bypass attacks on auth we saw and how we fixed them — check this before debugging a "proxy not routing" symptom.
+4. **`scripts/setup/`** — historical bring-up scripts (not re-runnable, kept as archaeology).
+5. **`scripts/setup/session-2026-04-23/`** — the scratch scripts from the original setup session. Useful as a template when rebuilding.
+
+## Non-derivable context you need
+
+- **Host is a Shadow PC** (Blade cloud desktop, AMD EPYC). **No nested virtualization.** WSL2 / Docker Desktop / Hyper-V guests **cannot run here**. Only WSL1. Don't suggest WSL2-only tooling.
+- **Tailscale is active** on the Windows host. WSL's `/etc/resolv.conf` is pinned (`chattr +i`) because WSL's auto-generator otherwise writes broken `fec0::` DNS inherited from Windows.
+- **Python 3.14 managed by uv**, not apt. The proxy's `pyproject.toml` requires 3.14. Don't `apt install python3.14` — use `uv python install 3.14`.
+- **systemd is held** (`apt-mark hold systemd packagekit libnss-systemd`). WSL1 can't run systemd. Don't unhold or `apt upgrade -y` without the hold re-applied.
+- **Linux Claude Code DOES run on WSL1 — but only at version 2.1.81 or older.** The 2.1.83+ releases ship as Bun-compiled native ELF binaries whose segment alignment WSL1's loader rejects with "Exec format error" ([anthropics/claude-code#38788](https://github.com/anthropics/claude-code/issues/38788), [#39385](https://github.com/anthropics/claude-code/issues/39385)). 2.1.81 is still a plain Node script (shebang `#!/usr/bin/env node`) and runs fine. Install pinned:
+  ```
+  npm install -g @anthropic-ai/claude-code@2.1.81
+  ```
+  The bash launcher prefers this Linux install when present, and falls back to Windows `claude.cmd` via interop otherwise. **Do NOT `npm update` claude-code on WSL1** — it will break. If a newer version ships a fix, verify before upgrading.
+
+## The three auth pitfalls (this is where hours get lost)
+
+Claude Code's auth-precedence rules silently route around `ANTHROPIC_BASE_URL` unless three things are ALL neutralized:
+
+1. **Cached OAuth** at `%USERPROFILE%\.claude\.credentials.json` (claude.ai Max login tokens). **Fix:** launchers set `USERPROFILE=%LOCALAPPDATA%\claude-nim-profile` to an isolated empty profile.
+2. **Cached account metadata** at `%USERPROFILE%\.claude.json`. Same fix above handles this — it lives under USERPROFILE too.
+3. **`ANTHROPIC_API_KEY` precedence** — even when empty/unset in the current process, some path in Claude Code prefers it over `ANTHROPIC_AUTH_TOKEN`. **Fix:** launchers explicitly set `ANTHROPIC_API_KEY=` (empty). Without this, claude probes the proxy once (GET / → 401), gives up, and uses cached creds.
+
+If you see the banner showing "`<email>'s Organization`" or the model response nailing Claude-4.6-specific knowledge cutoffs effortlessly: **the proxy is being bypassed**. Run `check-nim` to verify.
+
+## How to operate
+
+**Daily use:**
+- `claude-nim [args]` — start proxy if needed, launch Claude Code routed through it
+- `stop-nim-proxy` — `wsl --shutdown` which cleanly kills the proxy
+- Both on PATH in WSL (`/usr/local/bin/`) and Windows (`C:\Users\Shadow\bin\`).
+
+**Diagnostics:**
+- `check-nim` — multi-step health check. Runs the verification suite from PLAN.md § Verification. Use this before and after any config change.
+- `tail -f /tmp/nim-proxy.log` — live proxy traffic (from WSL side)
+- Direct curl health probe: `curl -sS -o /dev/null -w "%{http_code}\n" http://localhost:8082/` → 401 means up
+
+**Changing models:**
+- Edit `/root/repos/free-claude-code/.env` (NOT this repo's env.template — that's the template; the live `.env` lives in the upstream proxy repo)
+- Restart proxy: `stop-nim-proxy && claude-nim ...`
+- Available models: `/root/repos/free-claude-code/nvidia_nim_models.json`
+
+**NIM API key:**
+- Stored in `/root/repos/free-claude-code/.env` as `NVIDIA_NIM_API_KEY=nvapi-...`
+- Gitignored. Key is 68-char `nvapi-` prefix. Regenerate at build.nvidia.com/settings/api-keys if revoked.
+
+## What NOT to do
+
+- **Don't** delete `C:\Users\Shadow\.claude\.credentials.json` or `~/.claude.json` on the real user. The user uses paid Claude Max in other shells and needs these. Only the isolated profile (`%LOCALAPPDATA%\claude-nim-profile\`) should be bare.
+- **Don't** edit `C:\Users\Shadow\bin\*.bat` — they're thin stubs that forward to the canonical copies in WSL. Edit `bin/*.bat` in this repo instead, commit.
+- **Don't** try WSL2 features. They silently fail on Shadow PC.
+- **Don't** run `apt upgrade` without checking `apt-mark showhold`. systemd being upgraded-then-failing cascades into broken dependency graphs.
+- **Don't** set `ANTHROPIC_API_KEY` or `ANTHROPIC_BASE_URL` system-wide as User/Machine env vars. The launcher scopes them per-session on purpose so the paid Claude Code still works in normal shells.
+
+## If the user reports it's broken
+
+1. `check-nim` — shows which layer failed.
+2. If check-nim says "proxy down": `stop-nim-proxy && claude-nim --version` (the `--version` triggers auto-restart through the launcher).
+3. If check-nim says "traffic not routing": re-check `logs/2026-04-23-open-issues.md`. One of the three auth pitfalls has returned.
+4. If `uv sync` starts demanding new Python versions: pyproject.toml upstream bumped. `uv python install <version>` then re-sync.
+5. If the proxy starts but immediately 500s: `tail /tmp/nim-proxy.log`. Often a stale API key (regenerate) or an unreachable model ID (check nvidia_nim_models.json).

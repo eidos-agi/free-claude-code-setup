@@ -85,3 +85,22 @@ Proxy log after: two `POST /v1/messages?beta=true HTTP/1.1" 200 OK` entries (sou
 **Launchers updated** (follow-up commit): both `bin/claude-nim.bat` and `bin/claude-nim` now explicitly set `ANTHROPIC_API_KEY=""` as a belt-and-suspenders override. Verified end-to-end through Windows PowerShell invocation, with proxy receiving `POST /v1/messages` during the session.
 
 **Lingering mystery:** why the earlier interactive-mode test (before this fix) appeared to chat and get responses despite the same bypass. Best guess: interactive Claude Code handles auth failures differently (maybe it has a cached OAuth in-process that survives a token check), whereas `-p` one-shot has stricter checks. Not worth further investigation — the launchers now force env-var-only auth.
+
+---
+
+## Correction — 2026-04-24
+
+**I was wrong** that "Linux Claude Code doesn't run on WSL1."
+
+The truth (confirmed via web search + test): Claude Code 2.1.83+ fails on WSL1 with "Exec format error" — that's a real regression caused by Bun's new ELF segment alignment. But 2.1.81 and earlier still work; those ship as plain Node scripts with `#!/usr/bin/env node`, which WSL1 executes fine.
+
+Upstream tracking: [anthropics/claude-code#38788](https://github.com/anthropics/claude-code/issues/38788), [#39385](https://github.com/anthropics/claude-code/issues/39385), [#40546](https://github.com/anthropics/claude-code/issues/40546).
+
+**Verified working:**
+- `npm install -g @anthropic-ai/claude-code@2.1.81` — succeeds on WSL1 with Node 20
+- `claude --version` → `2.1.81 (Claude Code)` runs cleanly
+- `claude -p "..." --model claude-haiku-4-20250514` with `ANTHROPIC_BASE_URL=http://localhost:8082` → response returns, proxy log shows `POST /v1/messages?beta=true 200 OK` confirming routing
+
+**Launcher updated:** `bin/claude-nim` now prefers the Linux-native claude at `/root/.nvm/versions/node/*/bin/claude` and only falls back to `/mnt/c/Users/Shadow/AppData/Roaming/npm/claude.cmd` via Windows interop if Linux install is absent. HOME is isolated to `/root/claude-nim-home/` to prevent a future Linux OAuth login from polluting the proxy-routing path, symmetric to the USERPROFILE isolation on the Windows side.
+
+**Lesson for future-me:** When a Linux binary says "Exec format error" on WSL1, don't conclude "this won't work at all." Check version history — the regression may be recent and older versions may install cleanly.

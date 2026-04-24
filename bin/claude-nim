@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
 # claude-nim — start the NIM proxy if needed, then launch Claude Code routed through it.
-# Works from any directory in WSL. Invokes Windows claude.exe via interop since
-# WSL1 is incompatible with the @anthropic-ai/claude-code npm package on this host.
+# Works from any directory in WSL. Prefers Linux-native Claude Code (pinned to
+# 2.1.81 — version 2.1.83+ uses Bun ELF segment alignment that WSL1's loader
+# rejects with "Exec format error"; see anthropics/claude-code issue #38788).
+# Falls back to Windows claude.cmd via interop if the Linux install is missing.
 set -eu
 
 PORT=${NIM_PROXY_PORT:-8082}
 PROXY_DIR=/root/repos/free-claude-code
 LOG=/tmp/nim-proxy.log
-CLAUDE_EXE=/mnt/c/Users/Shadow/AppData/Roaming/npm/claude.cmd
+# Prefer Linux-native claude (nvm-managed; pin 2.1.81 for WSL1 compat)
+LINUX_CLAUDE=$(ls -1 /root/.nvm/versions/node/*/bin/claude 2>/dev/null | head -1)
+WINDOWS_CLAUDE=/mnt/c/Users/Shadow/AppData/Roaming/npm/claude.cmd
 
 listening() {
     # WSL1 /proc/net/tcp is per-session, so `ss` misses sockets from other WSL
@@ -42,26 +46,32 @@ export ANTHROPIC_AUTH_TOKEN=freecc
 export ANTHROPIC_BASE_URL="http://localhost:${PORT}"
 # Explicit empty ANTHROPIC_API_KEY — if set in the parent env (even to empty),
 # Claude Code prefers it over ANTHROPIC_AUTH_TOKEN and the proxy gets bypassed.
-# We explicitly unset-and-re-export empty to win the precedence check.
 export ANTHROPIC_API_KEY=""
 
-# Windows Claude Code reads stored OAuth creds from %USERPROFILE%\.claude\.credentials.json
-# which takes precedence over ANTHROPIC_BASE_URL when present (as is the case if you've
-# logged into claude.ai / Claude Max on this user account). Point USERPROFILE at an
-# isolated empty profile to force env-var auth.
-ISOLATED_PROFILE_WIN='C:\Users\Shadow\AppData\Local\claude-nim-profile'
-ISOLATED_PROFILE_WSL='/mnt/c/Users/Shadow/AppData/Local/claude-nim-profile'
-mkdir -p "${ISOLATED_PROFILE_WSL}/.claude"
-export USERPROFILE="${ISOLATED_PROFILE_WIN}"
-
-# WSLENV carries these into the Windows claude.exe process.
-export WSLENV="${WSLENV:+$WSLENV:}ANTHROPIC_AUTH_TOKEN:ANTHROPIC_BASE_URL:USERPROFILE/w"
-
-if [ -x "${CLAUDE_EXE}" ]; then
-    exec "${CLAUDE_EXE}" "$@"
-elif command -v claude >/dev/null 2>&1; then
-    exec claude "$@"
-else
-    echo "[claude-nim] ERROR: claude CLI not found at ${CLAUDE_EXE} or on PATH." >&2
-    exit 1
+# --- Prefer Linux-native claude ---
+if [ -n "${LINUX_CLAUDE:-}" ] && [ -x "${LINUX_CLAUDE}" ]; then
+    # Isolate HOME so any future OAuth login doesn't leak into .claude/.credentials.json
+    export HOME=/root/claude-nim-home
+    mkdir -p "${HOME}/.claude"
+    # claude's shebang is #!/usr/bin/env node — make sure nvm's node is first on PATH
+    export PATH="$(dirname "${LINUX_CLAUDE}"):${PATH}"
+    exec "${LINUX_CLAUDE}" "$@"
 fi
+
+# --- Fallback: Windows claude.cmd via interop ---
+if [ -x "${WINDOWS_CLAUDE}" ]; then
+    # Windows Claude Code stores OAuth at %USERPROFILE%\.claude\.credentials.json;
+    # redirect USERPROFILE to an isolated profile to force env-var auth.
+    ISOLATED_PROFILE_WIN='C:\Users\Shadow\AppData\Local\claude-nim-profile'
+    ISOLATED_PROFILE_WSL='/mnt/c/Users/Shadow/AppData/Local/claude-nim-profile'
+    mkdir -p "${ISOLATED_PROFILE_WSL}/.claude"
+    export USERPROFILE="${ISOLATED_PROFILE_WIN}"
+    export WSLENV="${WSLENV:+$WSLENV:}ANTHROPIC_AUTH_TOKEN:ANTHROPIC_BASE_URL:ANTHROPIC_API_KEY:USERPROFILE/w"
+    exec "${WINDOWS_CLAUDE}" "$@"
+fi
+
+echo "[claude-nim] ERROR: no claude CLI found." >&2
+echo "[claude-nim]   Linux  (pinned 2.1.81): install with" >&2
+echo "[claude-nim]   npm install -g @anthropic-ai/claude-code@2.1.81" >&2
+echo "[claude-nim]   Windows fallback expected at: ${WINDOWS_CLAUDE}" >&2
+exit 1

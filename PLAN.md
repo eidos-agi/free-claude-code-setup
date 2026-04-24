@@ -54,9 +54,18 @@ claude-nim  (launcher — bash in WSL, .bat on Windows)
 
 This host is a **Shadow PC** (Blade/OVH cloud gaming desktop, AMD EPYC 7543P). Nested virtualization is not exposed to the guest (`SecondLevelAddressTranslationExtensions: False`), so Hyper-V / WSL2 / Docker Desktop / any other `-v` hardware-accel path flat out cannot run. WSL1 uses syscall translation — no hypervisor, no SLAT needed — and it's sufficient here because the proxy is pure Python + FastAPI + stdlib networking.
 
-### Why Windows Claude Code, not Linux
+### Linux Claude Code on WSL1 — works if you pin 2.1.81
 
-The `@anthropic-ai/claude-code` npm package has a hard WSL1 refusal in its postinstall. Native Windows Claude Code is already installed and works. WSL1 shares the Windows network namespace, so `localhost:8082` is the same port on both sides — the proxy living in WSL is fully reachable by a Windows-native `claude.exe`.
+**Status:** Linux-native Claude Code runs fine on WSL1 at `@anthropic-ai/claude-code@2.1.81`. It's a plain Node script. 2.1.83+ is a Bun-compiled native binary whose ELF segment alignment WSL1's syscall shim rejects with "Exec format error" (known regression: [anthropics/claude-code#38788](https://github.com/anthropics/claude-code/issues/38788), [#39385](https://github.com/anthropics/claude-code/issues/39385), [#40546](https://github.com/anthropics/claude-code/issues/40546)).
+
+**Install pinned:**
+```
+npm install -g @anthropic-ai/claude-code@2.1.81
+```
+
+**Launcher preference:** `bin/claude-nim` prefers Linux claude over Windows interop when both are installed. Linux path avoids the Windows/WSL boundary entirely — faster startup, cleaner env inheritance, native file paths (no `/mnt/c/...` translation). Windows interop remains as fallback for machines where the Linux install isn't possible.
+
+**Don't `npm update` claude-code on WSL1.** It will pull a post-2.1.81 release and silently regress to exec-format-error. If upstream ships a WSL1-compatible fix in a newer version, verify before bumping.
 
 ---
 
