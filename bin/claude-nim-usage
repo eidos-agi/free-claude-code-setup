@@ -60,11 +60,13 @@ def summarize(entries: list[dict], since: datetime | None = None) -> dict:
 
     by_day = defaultdict(int)
     status_counts = Counter()
+    model_counts = Counter()
     durs = []
     for e in filtered:
         day = e["_ts"].astimezone(timezone.utc).strftime("%Y-%m-%d")
         by_day[day] += 1
         status_counts[e.get("status", "?")] += 1
+        model_counts[e.get("model") or "<unknown>"] += 1
         if isinstance(e.get("dur_ms"), int):
             durs.append(e["dur_ms"])
 
@@ -72,6 +74,7 @@ def summarize(entries: list[dict], since: datetime | None = None) -> dict:
         "total": len(filtered),
         "by_day": dict(sorted(by_day.items())),
         "status": dict(status_counts),
+        "model": dict(model_counts.most_common()),
         "dur_ms_p50": pctile(durs, 50),
         "dur_ms_p95": pctile(durs, 95),
         "dur_ms_avg": int(sum(durs) / len(durs)) if durs else 0,
@@ -85,6 +88,9 @@ def print_human(summary: dict, label: str) -> None:
         status_str = ", ".join(f"{k}:{v}" for k, v in sorted(summary["status"].items()))
         print(f"  by status      : {status_str}")
     print(f"  latency (ms)   : avg {summary['dur_ms_avg']}  p50 {summary['dur_ms_p50']}  p95 {summary['dur_ms_p95']}")
+    if summary.get("model"):
+        model_str = ", ".join(f"{k}:{v}" for k, v in summary["model"].items())
+        print(f"  by model       : {model_str}")
     if summary["by_day"]:
         print("  by day:")
         for day, n in summary["by_day"].items():

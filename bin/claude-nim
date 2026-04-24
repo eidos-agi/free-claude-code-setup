@@ -28,8 +28,11 @@ else
     echo "[claude-nim] starting NIM proxy (log: ${LOG})..." >&2
     mkdir -p "$(dirname "${LOG}")"
     cd "${PROXY_DIR}"
+    # Append (>>) not truncate (>) so log accumulates across proxy restarts.
+    # Truncating made offset-based POST-counting in validation scripts unreliable.
+    echo "# --- proxy restart $(date -Iseconds) ---" >> "${LOG}"
     nohup $HOME/.local/bin/uv run uvicorn server:app --host 0.0.0.0 --port "${PORT}" \
-        >"${LOG}" 2>&1 &
+        >>"${LOG}" 2>&1 &
     disown $! 2>/dev/null || true
     for _ in $(seq 1 20); do
         sleep 1

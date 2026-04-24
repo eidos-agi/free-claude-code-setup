@@ -58,7 +58,7 @@ Run after any config change to confirm the "always-on" invariants still hold.
 
 **Diagnostics:**
 - `check-nim` — multi-step health check. Runs the verification suite from PLAN.md § Verification. Use this before and after any config change.
-- `tail -f /tmp/nim-proxy.log` — live proxy traffic (from WSL side)
+- `tail -f ~/.cache/nim-proxy.log` — live proxy traffic (moved from `/tmp/` to `$HOME/.cache/` in the user-scope migration — `/tmp/` was root-owned)
 - Direct curl health probe: `curl -sS -o /dev/null -w "%{http_code}\n" http://localhost:8082/` → 401 means up
 
 **Changing models:**
