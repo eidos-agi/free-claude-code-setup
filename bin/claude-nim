@@ -8,7 +8,7 @@ set -eu
 
 PORT=${NIM_PROXY_PORT:-8082}
 PROXY_DIR=$HOME/repos/free-claude-code
-LOG=/tmp/nim-proxy.log
+LOG=$HOME/.cache/nim-proxy.log
 # Prefer Linux-native claude (nvm-managed; pin 2.1.81 for WSL1 compat)
 LINUX_CLAUDE=$(ls -1 $HOME/.nvm/versions/node/*/bin/claude 2>/dev/null | head -1)
 WINDOWS_CLAUDE=/mnt/c/Users/Shadow/AppData/Roaming/npm/claude.cmd
@@ -26,6 +26,7 @@ if listening; then
     echo "[claude-nim] proxy already listening on :${PORT} — reusing" >&2
 else
     echo "[claude-nim] starting NIM proxy (log: ${LOG})..." >&2
+    mkdir -p "$(dirname "${LOG}")"
     cd "${PROXY_DIR}"
     nohup $HOME/.local/bin/uv run uvicorn server:app --host 0.0.0.0 --port "${PORT}" \
         >"${LOG}" 2>&1 &
