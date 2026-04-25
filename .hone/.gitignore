@@ -1,0 +1,4 @@
+# Transient hone state — keep mission.md and notebook.md committed,
+# turn logs and state.json are session-specific.
+state.json
+turns/*.tmp

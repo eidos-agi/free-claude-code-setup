@@ -1,8 +1,55 @@
 # CLAUDE.md — instructions for future Claude Code sessions in this repo
 
-**Side note:** `insights/` contains durable cross-session lessons (WSL1 quirks, auth pitfalls, claude-code version pinning). Has its own `CLAUDE.md` curator briefing — when cwd'd into `insights/`, act as a knowledge-base curator (search before regenerate, propose new entries, keep entries terse). See `insights/CLAUDE.md` for the full briefing.
-
 This file auto-loads when a Claude Code session has this repo as cwd. Read it first before acting.
+
+## Two self-improvement loops are wired into this repo
+
+This repo is set up to **improve itself over time** via [hone](https://github.com/eidos-agi/hone), an MCP server that runs a 4-phase ceremony — Observe → Diagnose+Change → Measure → Retain. `.mcp.json` registers hone for any session with this repo as cwd; `.hone/mission.md` defines what "better" means here so Diagnose+Change has intent.
+
+There are two distinct loops you can run, and they are both legitimate ongoing work:
+
+### Loop 1 — Improve the mission
+
+```bash
+/loop 15m hone                # tick the setup repo every 15 minutes
+hone 5                        # run 5 ticks back-to-back interactively
+```
+
+Each tick observes the real state of this target (STATUS.md, OPEN-QUESTIONS.md, recent usage from `~/.cache/nim-proxy-usage.jsonl`, recent commits, last validation run), diagnoses the most actionable gap, makes a proportional change, re-measures, and retains the turn into `.hone/notebook.md`. Over many ticks the notebook IS the trajectory of this mission's improvement.
+
+The ranked definition of "better" lives in [`.hone/mission.md`](.hone/mission.md). Read that file before tick 1 — diagnoses without it tend to be vague.
+
+### Loop 2 — Improve the instructions themselves (this file)
+
+This `CLAUDE.md` is **in scope for hone to update**. If a tick observes that:
+
+- A guidance section here is stale (e.g. references a path that moved, or a tool that's been renamed)
+- A pattern of confusion is recurring across sessions (cross-reference `insights/` and `OPEN-QUESTIONS.md`)
+- A non-obvious gotcha exists in the repo that this file doesn't surface
+- A section is too long, too vague, or out-of-priority-order for the most common questions
+
+…then the Diagnose+Change phase should propose a concrete edit to this file. Treat the instructions as code: terser is better, examples are better than prose, and *anything that bit a session is fair game to encode here*.
+
+**The recursive closure:** if hone observes that its own meta-instructions in *this* file are themselves the bottleneck (e.g. unclear what a tick should do, or which loop to run when), Diagnose+Change can edit *these very paragraphs*. That's the `hone hone` move applied to the instructions level.
+
+### When to run which loop
+
+- **Active development on the mission** — Loop 1 (`hone` against this repo as the default target). Notebook fills up with concrete deltas.
+- **Suspecting the instructions are off** — Loop 2: explicitly ask hone to observe and improve `CLAUDE.md`. One tick, focused.
+- **Idle background time** — `/loop 30m hone` keeps Loop 1 ticking. Cheap, low-noise.
+
+### Out of scope for hone
+
+Don't let hone:
+- Push commits to public-facing repos without explicit user approval (eidos-agi org repos especially)
+- Add new dependencies to `bootstrap.sh` without hitting an OPEN-QUESTIONS entry that justifies them
+- Generalize this setup to non-WSL1 environments speculatively (covered explicitly in `.hone/mission.md` "What 'better' does NOT mean")
+
+If a hone tick proposes any of those, the Measure phase should revert.
+
+---
+
+**Side note:** `insights/` contains durable cross-session lessons (WSL1 quirks, auth pitfalls, claude-code version pinning). Has its own `CLAUDE.md` curator briefing — when cwd'd into `insights/`, act as a knowledge-base curator (search before regenerate, propose new entries, keep entries terse). See `insights/CLAUDE.md` for the full briefing.
 
 ## What this repo is
 

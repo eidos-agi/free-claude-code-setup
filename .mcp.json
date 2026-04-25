@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "hone": {
+      "command": "/home/dshanklin/.local/bin/uv",
+      "args": [
+        "--directory",
+        "/home/dshanklin/repos-eidos-agi/hone",
+        "run",
+        "hone"
+      ]
+    }
+  }
+}
