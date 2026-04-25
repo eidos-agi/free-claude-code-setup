@@ -1,5 +1,7 @@
 # CLAUDE.md — instructions for future Claude Code sessions in this repo
 
+**Side note:** `insights/` contains durable cross-session lessons (WSL1 quirks, auth pitfalls, claude-code version pinning). Has its own `CLAUDE.md` curator briefing — when cwd'd into `insights/`, act as a knowledge-base curator (search before regenerate, propose new entries, keep entries terse). See `insights/CLAUDE.md` for the full briefing.
+
 This file auto-loads when a Claude Code session has this repo as cwd. Read it first before acting.
 
 ## What this repo is
