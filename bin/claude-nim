@@ -7,7 +7,12 @@
 set -eu
 
 PORT=${NIM_PROXY_PORT:-8082}
-PROXY_DIR=$HOME/repos/free-claude-code
+# Proxy is now vendored as a subtree at proxy/ in this repo (previously a
+# separate eidos-agi/free-claude-code-fork repo — consolidated 2026-04-24).
+# Compute path relative to the launcher's own location so it works regardless
+# of where the repo is cloned or which user is running it.
+REPO_ROOT="$(cd "$(dirname "$(realpath "$0")")/.." && pwd)"
+PROXY_DIR="$REPO_ROOT/proxy"
 LOG=$HOME/.cache/nim-proxy.log
 # Prefer Linux-native claude (nvm-managed; pin 2.1.81 for WSL1 compat)
 LINUX_CLAUDE=$(ls -1 $HOME/.nvm/versions/node/*/bin/claude 2>/dev/null | head -1)

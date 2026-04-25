@@ -14,7 +14,7 @@
 |---|---|---|
 | Launch Claude Code via NIM | `claude-nim [args]` | WSL or Windows shell, any dir |
 | Stop the proxy | `stop-nim-proxy` | WSL or Windows shell |
-| Edit model routing | `nano ~/repos/free-claude-code/.env` | WSL |
+| Edit model routing | `nano ~/repos/free-claude-code-setup/proxy/.env` | WSL |
 | Inspect proxy log | `tail -f /tmp/nim-proxy.log` | WSL |
 | Verify proxy is up | `curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8082/` — expect `401` | either |
 | View operations history | `git log --oneline` | WSL, in this repo |
@@ -40,7 +40,7 @@ claude-nim  (launcher — bash in WSL, .bat on Windows)
                │
                ▼
          WSL localhost:8082 — uvicorn + FastAPI
-         ~/repos/free-claude-code/ (upstream proxy, git-cloned)
+         ~/repos/free-claude-code-setup/proxy/ (upstream proxy, vendored as a git subtree)
                │
                ├─ translates Anthropic API format → NIM
                ├─ enforces 40/60s rate limit client-side
@@ -87,7 +87,7 @@ npm install -g @anthropic-ai/claude-code@2.1.81
     ├── move-to-wsl.sh                  ← one-shot: copied setup folder into WSL
     └── install-logs/                   ← DISM/BCD/WSL logs from first-time install
 
-~/repos/free-claude-code/           ← upstream proxy code (separate git repo)
+~/repos/free-claude-code-setup/proxy/           ← the NIM proxy (vendored as a subtree)
 ├── server.py                           ← entry point (uvicorn app)
 ├── pyproject.toml                      ← declares Python >=3.14; uv manages it
 ├── uv.lock                             ← locked deps
@@ -160,14 +160,14 @@ Failure modes:
 None strictly required — the system is essentially stateless once set up. But if you like dashboards:
 
 - **Rate usage:** NVIDIA doesn't expose per-key usage counters on the free tier. Proxy log (`tail -f /tmp/nim-proxy.log`) shows each request; eyeball it if you're curious.
-- **Model availability:** NIM occasionally deprecates models. If `MODEL_OPUS` etc. start 404ing, check `~/repos/free-claude-code/nvidia_nim_models.json` against the current catalog at build.nvidia.com.
+- **Model availability:** NIM occasionally deprecates models. If `MODEL_OPUS` etc. start 404ing, check `~/repos/free-claude-code-setup/proxy/nvidia_nim_models.json` against the current catalog at build.nvidia.com.
 - **Proxy uptime:** `wsl --shutdown` or a Windows reboot will kill it; launcher auto-restarts on next `claude-nim` invocation.
 
 ---
 
 ## Key configuration
 
-### Proxy `.env` (`~/repos/free-claude-code/.env`, perms 600, gitignored)
+### Proxy `.env` (`~/repos/free-claude-code-setup/proxy/.env`, perms 600, gitignored)
 
 ```
 NVIDIA_NIM_API_KEY="nvapi-..."          # required, from build.nvidia.com
@@ -186,7 +186,7 @@ See `env.template` in this repo for the full defaulted template.
 
 ### Swapping models
 
-Catalog: `~/repos/free-claude-code/nvidia_nim_models.json`. Notable:
+Catalog: `~/repos/free-claude-code-setup/proxy/nvidia_nim_models.json`. Notable:
 
 | Tier | Candidate IDs | Notes |
 |---|---|---|
@@ -286,7 +286,7 @@ If this PC gets wiped or you're doing the same thing on another Shadow-class mac
 7. **Install Python + deps:**
    ```
    ~/.local/bin/uv python install 3.14
-   cd ~/repos/free-claude-code && ~/.local/bin/uv sync
+   cd ~/repos/free-claude-code-setup/proxy && ~/.local/bin/uv sync
    ```
 
 8. **Wire launchers to PATH:**
@@ -321,7 +321,7 @@ Check `tail -30 /tmp/nim-proxy.log`. Common causes:
 - `.env` missing or malformed — regenerate from `env.template`
 - `NVIDIA_NIM_API_KEY` empty or expired — regenerate at build.nvidia.com
 - Python 3.14 missing — `~/.local/bin/uv python install 3.14`
-- Deps unsynced after an upstream `free-claude-code` pull — `cd ~/repos/free-claude-code && uv sync`
+- Deps unsynced after an upstream `free-claude-code` pull — `cd ~/repos/free-claude-code-setup/proxy && uv sync`
 
 **Claude Code gets 429 errors / long pauses.**
 You hit the 40/min rate limit. Not fixable — it's a NIM cap. Reduce `PROVIDER_MAX_CONCURRENCY` in `.env` for smoother pacing. Fall back to real Claude for heavy agent runs.
@@ -344,7 +344,7 @@ Two tells that the bypass is happening:
 Definitive check: `curl -sS -X POST http://localhost:8082/v1/messages -H "x-api-key: freecc" -H "anthropic-version: 2023-06-01" -H "content-type: application/json" -d '{"model":"claude-haiku-4-20250514","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}'`. The SSE response's `"model"` field will show the actual backing model (e.g. `"stepfun-ai/step-3.5-flash"`). If the proxy routes correctly but Claude Code doesn't use it, the `USERPROFILE` isolation is what's missing.
 
 **Switch to a different provider (OpenRouter, DeepSeek, LM Studio).**
-Edit `.env`, set that provider's API key, change `MODEL_*` values to `open_router/...` / `deepseek/...` / `lmstudio/...`. Restart proxy. See `~/repos/free-claude-code/README.md` upstream for provider-specific prefix conventions.
+Edit `.env`, set that provider's API key, change `MODEL_*` values to `open_router/...` / `deepseek/...` / `lmstudio/...`. Restart proxy. See `~/repos/free-claude-code-setup/proxy/README.md` upstream for provider-specific prefix conventions.
 
 ---
 

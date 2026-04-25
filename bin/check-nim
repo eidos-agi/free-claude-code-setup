@@ -66,19 +66,19 @@ fi
 
 #── 3. Upstream proxy repo + config ──────────────────────────────────────────
 sect "3. Upstream proxy ($HOME/repos/free-claude-code)"
-if [ -d $HOME/repos/free-claude-code ]; then
+if [ -d $HOME/repos/free-claude-code-setup/proxy ]; then
     ok "Proxy repo exists"
 else
     bad "Proxy repo missing at $HOME/repos/free-claude-code"
 fi
-if [ -f $HOME/repos/free-claude-code/.env ]; then
-    perms=$(stat -c %a $HOME/repos/free-claude-code/.env 2>/dev/null)
+if [ -f $HOME/repos/free-claude-code-setup/proxy/.env ]; then
+    perms=$(stat -c %a $HOME/repos/free-claude-code-setup/proxy/.env 2>/dev/null)
     if [ "$perms" = "600" ]; then
         ok ".env present, perms 600"
     else
-        note ".env perms are $perms (expected 600)" "chmod 600 $HOME/repos/free-claude-code/.env"
+        note ".env perms are $perms (expected 600)" "chmod 600 $HOME/repos/free-claude-code-setup/proxy/.env"
     fi
-    if grep -q '^NVIDIA_NIM_API_KEY="nvapi-' $HOME/repos/free-claude-code/.env; then
+    if grep -q '^NVIDIA_NIM_API_KEY="nvapi-' $HOME/repos/free-claude-code-setup/proxy/.env; then
         ok "NVIDIA_NIM_API_KEY present and well-formed"
     else
         bad "NVIDIA_NIM_API_KEY missing or malformed in .env"

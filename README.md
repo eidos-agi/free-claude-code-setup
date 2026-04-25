@@ -76,16 +76,16 @@ stop-nim-proxy
 │   └── stop-nim-proxy.bat cmd.exe stopper (Windows).
 └── scripts/setup/         Historical bring-up scripts (phase2.sh, etc.).
 
-~/repos/free-claude-code/   ← the actual proxy (upstream, git-cloned)
+~/repos/free-claude-code-setup/proxy/ ← the NIM proxy, vendored as a git subtree
 ```
 
-The proxy's `.env` lives in `~/repos/free-claude-code/.env` and is **gitignored** (contains the NIM key). Re-derive from `env.template` on a new machine.
+The proxy's `.env` lives in `~/repos/free-claude-code-setup/proxy/.env` and is **gitignored** (contains the NIM key). Re-derive from `env.template` on a new machine.
 
 ---
 
 ## Changing models
 
-Edit `~/repos/free-claude-code/.env`, change any of:
+Edit `~/repos/free-claude-code-setup/proxy/.env`, change any of:
 
 ```
 MODEL_OPUS="nvidia_nim/z-ai/glm4.7"
@@ -93,7 +93,7 @@ MODEL_SONNET="nvidia_nim/moonshotai/kimi-k2-thinking"
 MODEL_HAIKU="nvidia_nim/stepfun-ai/step-3.5-flash"
 ```
 
-Full list: `~/repos/free-claude-code/nvidia_nim_models.json`. Restart proxy: `stop-nim-proxy && claude-nim ...`.
+Full list: `~/repos/free-claude-code-setup/proxy/nvidia_nim_models.json`. Restart proxy: `stop-nim-proxy && claude-nim ...`.
 
 ---
 

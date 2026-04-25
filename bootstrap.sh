@@ -108,27 +108,20 @@ fi
 export PATH="$HOME/.local/bin:$PATH"
 log "  uv: $(uv --version)"
 
-# ---- step 7: clone repos ----
-log "[7/13] clone repos under $REPOS_DIR"
+# ---- step 7: clone repo (proxy is vendored as a subtree at proxy/) ----
+log "[7/13] clone free-claude-code-setup (proxy lives in-tree at proxy/)"
 mkdir -p "$REPOS_DIR"
-for repo_spec in \
-  "free-claude-code-setup|$SETUP_REPO_URL" \
-  "free-claude-code|$PROXY_REPO_URL"
-do
-  name="${repo_spec%%|*}"
-  url="${repo_spec##*|}"
-  path="$REPOS_DIR/$name"
-  if [ ! -d "$path/.git" ]; then
-    log "  cloning $name"
-    git clone --quiet "$url" "$path"
-  else
-    log "  $name already present (skipping clone)"
-  fi
-done
+SETUP_PATH="$REPOS_DIR/free-claude-code-setup"
+if [ ! -d "$SETUP_PATH/.git" ]; then
+  log "  cloning free-claude-code-setup"
+  git clone --quiet "$SETUP_REPO_URL" "$SETUP_PATH"
+else
+  log "  free-claude-code-setup already present (skipping clone)"
+fi
 
 # ---- step 8: provision .env ----
 log "[8/13] provision proxy .env"
-PROXY_DIR="$REPOS_DIR/free-claude-code"
+PROXY_DIR="$SETUP_PATH/proxy"
 ENV_FILE="$PROXY_DIR/.env"
 if [ ! -f "$ENV_FILE" ]; then
   TEMPLATE=""

@@ -28,8 +28,8 @@ fi
 
 if [ -z "${NIM_API_KEY:-}" ]; then
   # Try to reuse dshanklin's key
-  if [ -f /home/dshanklin/repos/free-claude-code/.env ]; then
-    NIM_API_KEY=$(grep '^NVIDIA_NIM_API_KEY=' /home/dshanklin/repos/free-claude-code/.env | sed 's/NVIDIA_NIM_API_KEY=//; s/^"//; s/"$//')
+  if [ -f /home/dshanklin/repos/free-claude-code-setup/proxy/.env ]; then
+    NIM_API_KEY=$(grep '^NVIDIA_NIM_API_KEY=' /home/dshanklin/repos/free-claude-code-setup/proxy/.env | sed 's/NVIDIA_NIM_API_KEY=//; s/^"//; s/"$//')
     echo "  (borrowed NIM_API_KEY from dshanklin's .env)"
   fi
 fi
@@ -77,10 +77,10 @@ sudo chmod +x "$TESTBOT_HOME/bootstrap.sh"
 STAGE_DIR=$(mktemp -d -p /tmp bootstrap-src-XXXXXX)
 sudo chmod 755 "$STAGE_DIR"
 sudo cp -r /home/dshanklin/repos/free-claude-code-setup "$STAGE_DIR/"
-sudo cp -r /home/dshanklin/repos/free-claude-code       "$STAGE_DIR/"
+sudo cp -r /home/dshanklin/repos/free-claude-code-setup/proxy       "$STAGE_DIR/"
 # Make .env unreadable by cnimtest (force use of NIM_API_KEY env var, which is
 # what a fresh-machine install would do)
-sudo rm -f "$STAGE_DIR/free-claude-code/.env"
+sudo rm -f "$STAGE_DIR/free-claude-code-setup/proxy/.env"
 sudo chmod -R a+rX "$STAGE_DIR"
 # Git 2.35+ refuses clones from repos owned by other users — chown to cnimtest.
 sudo chown -R "$TEST_USER:$TEST_USER" "$STAGE_DIR"
