@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# claude-nim (mac) — start the NIM proxy if needed, then launch Claude Code routed through it.
+# macOS counterpart to bin/claude-nim. Works on Apple Silicon and Intel.
+#
+# Differences from the WSL launcher:
+#   - No Windows claude.cmd fallback path.
+#   - No 2.1.81 version pin — macOS runs the latest claude binary (Mach-O) fine.
+#   - Picks claude in this order: $CLAUDE_BIN env, $HOME/.local/bin/claude,
+#     nvm-managed node global, anything resolvable on PATH (excluding *this* script).
+set -eu
+
+PORT=${NIM_PROXY_PORT:-8082}
+REPO_ROOT="$(cd "$(dirname "$(/usr/bin/python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$0")")/../.." && pwd)"
+PROXY_DIR="$REPO_ROOT/proxy"
+LOG="$HOME/.cache/nim-proxy.log"
+
+UV="${UV_BIN:-$HOME/.local/bin/uv}"
+[ -x "$UV" ] || UV="$(command -v uv 2>/dev/null || true)"
+[ -n "$UV" ] && [ -x "$UV" ] || { echo "[claude-nim] ERROR: uv not found. Run mac/bootstrap.sh." >&2; exit 1; }
+
+listening() {
+    local code
+    code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 2 \
+        "http://localhost:${PORT}/" 2>/dev/null) || code="000"
+    [ "$code" != "000" ] && [ -n "$code" ]
+}
+
+if listening; then
+    echo "[claude-nim] proxy already listening on :${PORT} — reusing" >&2
+else
+    echo "[claude-nim] starting NIM proxy (log: ${LOG})..." >&2
+    mkdir -p "$(dirname "${LOG}")"
+    cd "${PROXY_DIR}"
+    echo "# --- proxy restart $(date -Iseconds) ---" >> "${LOG}"
+    nohup "$UV" run uvicorn server:app --host 127.0.0.1 --port "${PORT}" \
+        >>"${LOG}" 2>&1 &
+    disown $! 2>/dev/null || true
+    for _ in $(seq 1 30); do
+        sleep 1
+        if listening; then break; fi
+    done
+    if ! listening; then
+        echo "[claude-nim] ERROR: proxy didn't come up in 30s. Recent log:" >&2
+        tail -30 "${LOG}" >&2
+        exit 1
+    fi
+    echo "[claude-nim] proxy ready on http://localhost:${PORT}" >&2
+fi
+
+export ANTHROPIC_AUTH_TOKEN=freecc
+export ANTHROPIC_BASE_URL="http://localhost:${PORT}"
+# Explicit empty ANTHROPIC_API_KEY — if set in parent env (even to empty), some
+# code paths in claude prefer it over ANTHROPIC_AUTH_TOKEN, bypassing the proxy.
+export ANTHROPIC_API_KEY=""
+
+# Isolate HOME so an OAuth login in this process can't write to the real
+# ~/.claude/.credentials.json (which the user's paid Claude Max session uses).
+export HOME="$HOME/claude-nim-home"
+mkdir -p "${HOME}/.claude"
+
+# --- Locate claude (skip self) ---
+SELF="$(/usr/bin/python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$0")"
+CANDIDATES=()
+[ -n "${CLAUDE_BIN:-}" ] && CANDIDATES+=("$CLAUDE_BIN")
+CANDIDATES+=("$HOME/.local/bin/claude")
+for n in $HOME/.nvm/versions/node/*/bin/claude; do
+    [ -e "$n" ] && CANDIDATES+=("$n")
+done
+# PATH lookup last, but only entries that aren't this script itself
+while IFS= read -r p; do
+    [ -z "$p" ] && continue
+    rp="$(/usr/bin/python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$p" 2>/dev/null || true)"
+    [ "$rp" = "$SELF" ] && continue
+    CANDIDATES+=("$p")
+done < <(/usr/bin/which -a claude 2>/dev/null || true)
+
+CLAUDE=""
+for c in "${CANDIDATES[@]}"; do
+    rc="$(/usr/bin/python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$c" 2>/dev/null || true)"
+    [ "$rc" = "$SELF" ] && continue
+    if [ -x "$c" ]; then CLAUDE="$c"; break; fi
+done
+
+if [ -z "$CLAUDE" ]; then
+    echo "[claude-nim] ERROR: no claude CLI found." >&2
+    echo "[claude-nim]   install with: npm install -g @anthropic-ai/claude-code" >&2
+    echo "[claude-nim]   or set CLAUDE_BIN=/path/to/claude" >&2
+    exit 1
+fi
+
+exec "$CLAUDE" "$@"

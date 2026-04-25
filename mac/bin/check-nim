@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+# check-nim (mac) — health-check suite for the NIM setup on macOS.
+# Usage:  check-nim          (normal — exits 0 if all critical checks pass)
+#         check-nim -v       (verbose — show last few proxy log lines)
+#         check-nim --live   (1 real inference request — uses 1 of 40/min)
+set -u
+
+PORT=${NIM_PROXY_PORT:-8082}
+VERBOSE=0
+LIVE=0
+for arg in "$@"; do
+    case "$arg" in
+        -v|--verbose) VERBOSE=1 ;;
+        -l|--live)    LIVE=1 ;;
+        -h|--help)
+            sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//'
+            exit 0 ;;
+    esac
+done
+
+REPO_ROOT="$(cd "$(dirname "$(/usr/bin/python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$0")")/../.." && pwd)"
+PROXY_DIR="$REPO_ROOT/proxy"
+LOG="$HOME/.cache/nim-proxy.log"
+
+pass=0; fail=0; warn=0
+ok()   { printf "  \033[32m✓\033[0m  %s\n" "$1"; pass=$((pass+1)); }
+bad()  { printf "  \033[31m✗\033[0m  %s\n" "$1"; [ $# -ge 2 ] && printf "      %s\n" "$2"; fail=$((fail+1)); }
+note() { printf "  \033[33m!\033[0m  %s\n" "$1"; [ $# -ge 2 ] && printf "      %s\n" "$2"; warn=$((warn+1)); }
+sect() { printf "\n\033[1m%s\033[0m\n" "$1"; }
+
+#── 1. Proxy health ──────────────────────────────────────────────────────────
+sect "1. Proxy"
+proxy_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "http://localhost:${PORT}/" 2>/dev/null || echo "000")
+case "$proxy_code" in
+    000) bad "Proxy not reachable on localhost:${PORT}" "Run 'claude-nim --version' to start it, or check ${LOG}" ;;
+    401) ok "Proxy listening on :${PORT} (HTTP 401 from anonymous GET = healthy)" ;;
+    *)   note "Proxy responded on :${PORT} but with unexpected status ${proxy_code}" "Expected 401 on anonymous GET /" ;;
+esac
+
+models_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 -H "x-api-key: freecc" "http://localhost:${PORT}/v1/models" 2>/dev/null || echo "000")
+if [ "$models_code" = "200" ]; then
+    ok "/v1/models returns 200 with auth token"
+elif [ "$proxy_code" = "000" ]; then
+    :  # already reported
+else
+    bad "/v1/models returned ${models_code} (expected 200 with 'x-api-key: freecc')" "Check ANTHROPIC_AUTH_TOKEN in proxy/.env"
+fi
+
+#── 2. Launchers on PATH ─────────────────────────────────────────────────────
+sect "2. Launchers"
+for tool in claude-nim stop-nim-proxy; do
+    if command -v "$tool" >/dev/null 2>&1; then
+        ok "$tool resolves to: $(command -v "$tool")"
+    else
+        bad "$tool not on PATH" "Run mac/bootstrap.sh to symlink into /opt/homebrew/bin or /usr/local/bin"
+    fi
+done
+
+#── 3. Proxy repo + .env ─────────────────────────────────────────────────────
+sect "3. Proxy"
+if [ -d "$PROXY_DIR" ]; then
+    ok "Proxy dir exists: $PROXY_DIR"
+else
+    bad "Proxy dir missing at $PROXY_DIR"
+fi
+if [ -f "$PROXY_DIR/.env" ]; then
+    perms=$(stat -f %A "$PROXY_DIR/.env" 2>/dev/null || stat -c %a "$PROXY_DIR/.env" 2>/dev/null)
+    if [ "$perms" = "600" ]; then
+        ok ".env present, perms 600"
+    else
+        note ".env perms are $perms (expected 600)" "chmod 600 $PROXY_DIR/.env"
+    fi
+    if grep -q '^NVIDIA_NIM_API_KEY="nvapi-' "$PROXY_DIR/.env"; then
+        ok "NVIDIA_NIM_API_KEY present and well-formed"
+    else
+        bad "NVIDIA_NIM_API_KEY missing or malformed in .env"
+    fi
+else
+    bad ".env missing — copy from env.template and fill in NIM key"
+fi
+
+#── 4. Isolated HOME (Mac side) ──────────────────────────────────────────────
+sect "4. Isolated HOME"
+ISO="$HOME/claude-nim-home"
+if [ -d "$ISO/.claude" ]; then
+    ok "Isolated HOME exists at $ISO/.claude"
+    if [ -f "$ISO/.claude/.credentials.json" ]; then
+        bad "ISOLATED HOME has .credentials.json!" "Means a real login leaked. Remove: rm '$ISO/.claude/.credentials.json'"
+    else
+        ok "No stored credentials in isolated HOME (env-var auth will win)"
+    fi
+else
+    note "Isolated HOME not yet created" "First run of claude-nim will create it"
+fi
+
+#── 5. Recent proxy traffic ──────────────────────────────────────────────────
+sect "5. Recent proxy traffic"
+if [ -f "$LOG" ]; then
+    posts=$(grep -c "POST /v1/messages" "$LOG" 2>/dev/null || echo 0)
+    posts=${posts//[^0-9]/}
+    if [ "${posts:-0}" -gt 0 ]; then
+        ok "$posts POST /v1/messages entries in $LOG (proxy IS seeing inference traffic)"
+        [ "$VERBOSE" = "1" ] && tail -5 "$LOG" | sed 's/^/      /'
+    else
+        note "0 POST /v1/messages in log — proxy may be running but hasn't served inference yet" "Try: claude-nim -p 'hi' --model claude-haiku-4-20250514"
+    fi
+else
+    note "$LOG not found" "First proxy start will create it"
+fi
+
+#── 6. Live inference (--live only) ──────────────────────────────────────────
+if [ "$LIVE" = "1" ] && [ "$proxy_code" = "401" ]; then
+    sect "6. Live inference (uses 1 request of 40/min)"
+    resp=$(curl -s --max-time 25 -X POST "http://localhost:${PORT}/v1/messages" \
+        -H "x-api-key: freecc" -H "anthropic-version: 2023-06-01" -H "content-type: application/json" \
+        -d '{"model":"claude-haiku-4-20250514","max_tokens":5,"stream":false,"messages":[{"role":"user","content":"ping"}]}' 2>/dev/null)
+    served_model=$(printf '%s' "$resp" | grep -oE '"model":[[:space:]]*"[^"]+"' | head -1 | cut -d'"' -f4)
+    if [ -n "$served_model" ]; then
+        ok "Live request routed — served by: $served_model"
+    else
+        bad "Live request failed" "Response: $(printf '%s' "$resp" | head -c 200)"
+    fi
+fi
+
+sect "Summary"
+printf "  %d passed, %d warnings, %d failed\n" "$pass" "$warn" "$fail"
+[ "$fail" -eq 0 ] && exit 0 || exit 1

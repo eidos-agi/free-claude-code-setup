@@ -1,0 +1,206 @@
+#!/usr/bin/env python3
+"""claude-nim-watch — live dashboard of NIM proxy traffic.
+
+Reads ~/.cache/nim-proxy-usage.jsonl (written by the proxy's usage_logger
+middleware) and re-renders a one-screen dashboard every refresh interval.
+
+Shows:
+  - Rolling 60s request count vs the NIM 40/min rate limit (visual bar)
+  - Today's totals: requests, tokens (in/out/total), latency p50/p95/avg
+  - Status breakdown
+  - Per-model breakdown (most-used first)
+  - Last N requests (newest first)
+
+Usage:
+  claude-nim-watch              # 1s refresh, last 8 requests
+  claude-nim-watch -n 2 -t 15   # 2s refresh, show last 15 requests
+  claude-nim-watch --no-clear   # don't clear screen between renders (for piping)
+
+No third-party deps — stdlib only.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import time
+from collections import Counter, deque
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+DEFAULT_LOG = Path(os.path.expanduser("~/.cache/nim-proxy-usage.jsonl"))
+NIM_RPM = 40  # NVIDIA NIM free-tier hard cap
+
+# ANSI escapes
+CLEAR = "\033[2J\033[H"
+DIM = "\033[2m"
+BOLD = "\033[1m"
+RESET = "\033[0m"
+GREEN = "\033[32m"
+YELLOW = "\033[33m"
+RED = "\033[31m"
+CYAN = "\033[36m"
+
+
+def load_recent(path: Path, max_entries: int = 5000) -> list[dict]:
+    """Read up to the last `max_entries` lines from the JSONL log.
+
+    For a typical session-length log (a few hundred lines/day) this just reads
+    everything. The cap is a guard against a runaway log file.
+    """
+    if not path.exists():
+        return []
+    out = deque(maxlen=max_entries)
+    with path.open("rb") as f:
+        for raw in f:
+            line = raw.decode("utf-8", "replace").strip()
+            if not line:
+                continue
+            try:
+                out.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    parsed = []
+    for e in out:
+        try:
+            e["_ts"] = datetime.fromisoformat(e["ts"].replace("Z", "+00:00"))
+            parsed.append(e)
+        except (KeyError, ValueError):
+            continue
+    return parsed
+
+
+def pctile(values: list[int], p: float) -> int:
+    if not values:
+        return 0
+    s = sorted(values)
+    k = min(len(s) - 1, int(p / 100 * len(s)))
+    return s[k]
+
+
+def short_model(m: str | None) -> str:
+    if not m:
+        return "?"
+    # claude-haiku-4-20250514 -> haiku-4
+    # claude-haiku-4-5-20251001 -> haiku-4.5
+    if m.startswith("claude-"):
+        parts = m[len("claude-"):].split("-")
+        if len(parts) >= 3 and parts[1].isdigit() and parts[2].isdigit() and len(parts[2]) <= 2:
+            return f"{parts[0]}-{parts[1]}.{parts[2]}"
+        if len(parts) >= 2:
+            return f"{parts[0]}-{parts[1]}"
+    return m
+
+
+def color_for_status(s) -> str:
+    try:
+        s = int(s)
+    except (TypeError, ValueError):
+        return ""
+    if 200 <= s < 300:
+        return GREEN
+    if s == 429:
+        return YELLOW
+    if 400 <= s < 500:
+        return YELLOW
+    if 500 <= s < 600:
+        return RED
+    return ""
+
+
+def rate_bar(now_count: int, cap: int, width: int = 30) -> str:
+    if cap <= 0:
+        return ""
+    frac = min(1.0, now_count / cap)
+    filled = int(frac * width)
+    color = GREEN if frac < 0.6 else YELLOW if frac < 0.9 else RED
+    bar = color + "█" * filled + DIM + "░" * (width - filled) + RESET
+    return f"[{bar}] {now_count}/{cap}"
+
+
+def render(entries: list[dict], n_recent: int) -> str:
+    now = datetime.now(timezone.utc)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    minute_ago = now - timedelta(seconds=60)
+
+    today = [e for e in entries if e["_ts"] >= today_start]
+    last_min = [e for e in entries if e["_ts"] >= minute_ago]
+
+    durs = [e["dur_ms"] for e in today if isinstance(e.get("dur_ms"), int)]
+    in_tok = sum(e.get("input_tokens") or 0 for e in today)
+    out_tok = sum(e.get("output_tokens") or 0 for e in today)
+    status = Counter(str(e.get("status", "?")) for e in today)
+    models = Counter(short_model(e.get("model")) for e in today).most_common()
+
+    lines = []
+    lines.append(f"{BOLD}claude-nim-watch{RESET}  {DIM}log: {DEFAULT_LOG}{RESET}")
+    lines.append(f"  {now.astimezone().strftime('%Y-%m-%d %H:%M:%S %Z')}  "
+                 f"({DIM}entries: {len(entries)}{RESET})")
+    lines.append("")
+    lines.append(f"{BOLD}Rate (last 60s){RESET}  {rate_bar(len(last_min), NIM_RPM)}")
+    lines.append("")
+    lines.append(f"{BOLD}Today{RESET}")
+    lines.append(f"  requests : {len(today)}")
+    lines.append(f"  tokens   : {in_tok:>7,} in  +  {out_tok:>7,} out  =  {in_tok + out_tok:>7,} total")
+    if durs:
+        lines.append(f"  latency  : p50 {pctile(durs, 50):>5}ms   p95 {pctile(durs, 95):>5}ms   "
+                     f"avg {sum(durs) // len(durs):>5}ms")
+    if status:
+        parts = []
+        for k, v in sorted(status.items()):
+            c = color_for_status(k)
+            parts.append(f"{c}{k}{RESET}:{v}")
+        lines.append(f"  status   : {'  '.join(parts)}")
+    if models:
+        parts = [f"{m}:{c}" for m, c in models[:5]]
+        lines.append(f"  models   : {'  '.join(parts)}")
+    lines.append("")
+    lines.append(f"{BOLD}Last {n_recent} requests{RESET}  {DIM}(newest first){RESET}")
+    lines.append(f"  {DIM}{'time':<8} {'model':<10} {'status':<6} {'dur':>7} {'in':>7} {'out':>5}{RESET}")
+    for e in entries[-n_recent:][::-1]:
+        ts = e["_ts"].astimezone().strftime("%H:%M:%S")
+        m = short_model(e.get("model"))[:10]
+        s = str(e.get("status", "?"))
+        sc = color_for_status(s)
+        d = e.get("dur_ms")
+        d_s = f"{d}ms" if isinstance(d, int) else "—"
+        it = e.get("input_tokens")
+        ot = e.get("output_tokens")
+        it_s = f"{it:,}" if isinstance(it, int) else "—"
+        ot_s = f"{ot:,}" if isinstance(ot, int) else "—"
+        lines.append(f"  {ts:<8} {m:<10} {sc}{s:<6}{RESET} {d_s:>7} {it_s:>7} {ot_s:>5}")
+    if not entries:
+        lines.append(f"  {DIM}(no entries yet — run 'claude-nim -p hi' to generate one){RESET}")
+    lines.append("")
+    lines.append(f"{DIM}Ctrl-C to quit{RESET}")
+    return "\n".join(lines)
+
+
+def main() -> int:
+    p = argparse.ArgumentParser()
+    p.add_argument("-n", "--interval", type=float, default=1.0, help="refresh interval seconds (default 1.0)")
+    p.add_argument("-t", "--tail", type=int, default=8, help="number of recent requests to show (default 8)")
+    p.add_argument("--log", type=Path, default=DEFAULT_LOG)
+    p.add_argument("--no-clear", action="store_true", help="do not clear screen between renders")
+    args = p.parse_args()
+
+    try:
+        while True:
+            entries = load_recent(args.log)
+            output = render(entries, args.tail)
+            if args.no_clear:
+                print(output)
+                print("---")
+            else:
+                sys.stdout.write(CLEAR)
+                sys.stdout.write(output)
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+            time.sleep(args.interval)
+    except KeyboardInterrupt:
+        return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

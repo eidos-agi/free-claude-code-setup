@@ -9,3 +9,7 @@
 # os noise
 .DS_Store
 Thumbs.db
+
+# python artifacts (mac/bin scripts use #!/usr/bin/env python3)
+__pycache__/
+*.pyc

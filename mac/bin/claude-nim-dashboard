@@ -1,0 +1,469 @@
+#!/usr/bin/env python3
+"""claude-nim-dashboard — web dashboard for live NIM proxy usage.
+
+Reads ~/.cache/nim-proxy-usage.jsonl (the proxy's usage_logger middleware
+writes one line per request) and serves a self-refreshing HTML page on
+http://localhost:8083 (or $NIM_DASH_PORT).
+
+  GET /           → single-page dashboard
+  GET /api/usage  → one-shot JSON snapshot
+  GET /api/stream → Server-Sent Events stream, new snapshot every second
+
+The proxy logs the *Anthropic-style* model name the client requested
+(claude-haiku-4-...). The dashboard reads proxy/.env (MODEL_OPUS/SONNET/HAIKU)
+and translates each request to the actual served NIM model
+(e.g. nvidia_nim/stepfun-ai/step-3.5-flash) so you see what really ran.
+
+No third-party deps — stdlib only. Bound to 127.0.0.1 by default.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import sys
+import time
+from collections import Counter
+from datetime import datetime, timedelta, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+DEFAULT_LOG = Path(os.path.expanduser("~/.cache/nim-proxy-usage.jsonl"))
+DEFAULT_ENV = Path(__file__).resolve().parent.parent.parent / "proxy" / ".env"
+NIM_RPM = 40
+
+_ENV_RE = re.compile(r'^([A-Z_][A-Z0-9_]*)\s*=\s*"?([^"\n]*)"?\s*$')
+
+
+def load_model_map(env_path: Path) -> dict[str, str]:
+    """Parse proxy/.env and return {requested-prefix: served-model}.
+
+    Maps Anthropic family prefixes to whatever the proxy will route them to:
+      claude-opus-*    -> MODEL_OPUS
+      claude-sonnet-*  -> MODEL_SONNET
+      claude-3-5-*     -> MODEL_SONNET (legacy alias)
+      claude-haiku-*   -> MODEL_HAIKU
+      claude-3-haiku-* -> MODEL_HAIKU (legacy)
+    """
+    vals: dict[str, str] = {}
+    if env_path.exists():
+        for line in env_path.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            m = _ENV_RE.match(line)
+            if m and m.group(1) in {"MODEL_OPUS", "MODEL_SONNET", "MODEL_HAIKU", "MODEL"}:
+                vals[m.group(1)] = m.group(2)
+    return vals
+
+
+def served_model(requested: str | None, mp: dict[str, str]) -> str | None:
+    if not requested:
+        return None
+    r = requested.lower()
+    if "opus" in r:
+        return mp.get("MODEL_OPUS") or mp.get("MODEL")
+    if "sonnet" in r:
+        return mp.get("MODEL_SONNET") or mp.get("MODEL")
+    if "haiku" in r:
+        return mp.get("MODEL_HAIKU") or mp.get("MODEL")
+    return mp.get("MODEL") or requested
+
+INDEX_HTML = """<!doctype html>
+<html lang=en>
+<head>
+<meta charset=utf-8>
+<title>claude-nim dashboard</title>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { font: 14px/1.45 -apple-system,BlinkMacSystemFont,"SF Mono",Menlo,monospace;
+         margin: 0; padding: 24px; background: #0d1117; color: #e6edf3; }
+  h1 { font-size: 18px; margin: 0 0 4px; letter-spacing: .02em; }
+  .sub { color: #7d8590; font-size: 12px; margin-bottom: 20px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+  .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 14px 16px; }
+  .card h2 { font-size: 11px; color: #7d8590; margin: 0 0 8px; letter-spacing: .12em; text-transform: uppercase; font-weight: 600; }
+  .big { font-size: 28px; font-weight: 600; line-height: 1.1; }
+  .big .unit { font-size: 14px; color: #7d8590; margin-left: 4px; }
+  .row { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid #21262d; }
+  .row:last-child { border: 0; }
+  .row .k { color: #7d8590; }
+  .bar { background: #21262d; border-radius: 3px; height: 12px; overflow: hidden; margin-top: 6px; }
+  .bar > div { height: 100%; transition: width .3s, background .3s; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid #21262d; }
+  th { color: #7d8590; font-weight: 500; font-size: 11px; letter-spacing: .04em; }
+  td.r, th.r { text-align: right; }
+  .pill { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px; font-weight: 500; }
+  .pill.ok    { background: #1f3a26; color: #56d364; }
+  .pill.warn  { background: #3a2f0f; color: #e3b341; }
+  .pill.err   { background: #3a1f1f; color: #ff7b72; }
+  .pill.dim   { background: #21262d; color: #7d8590; }
+  .dim { color: #6e7681; }
+  .footer { color: #6e7681; font-size: 11px; margin-top: 24px; }
+  .modeltag { margin-right: 14px; }
+</style>
+</head>
+<body>
+  <h1>claude-nim dashboard</h1>
+  <div class=sub id=meta>connecting…</div>
+
+  <div class=grid>
+    <div class=card>
+      <h2>Rate · last 60s</h2>
+      <div class=big><span id=rate_now>0</span><span class=unit>/ %RPM% rpm</span></div>
+      <div class=bar><div id=rate_bar style="width:0%; background:#3fb950"></div></div>
+      <div class=dim style="font-size:11px;margin-top:6px">NIM free-tier hard cap</div>
+    </div>
+
+    <div class=card>
+      <h2>Today · requests</h2>
+      <div class=big id=today_total>0</div>
+      <div id=today_status class=dim style="margin-top:8px;font-size:12px"></div>
+    </div>
+
+    <div class=card>
+      <h2>Today · tokens</h2>
+      <div class=big><span id=today_total_tokens>0</span></div>
+      <div class=row><span class=k>input</span>  <span id=today_in>0</span></div>
+      <div class=row><span class=k>output</span> <span id=today_out>0</span></div>
+    </div>
+
+    <div class=card>
+      <h2>Today · latency</h2>
+      <div class=row><span class=k>p50</span> <span id=lat_p50>—</span></div>
+      <div class=row><span class=k>p95</span> <span id=lat_p95>—</span></div>
+      <div class=row><span class=k>avg</span> <span id=lat_avg>—</span></div>
+    </div>
+
+    <div class=card>
+      <h2>Today · models</h2>
+      <div id=today_models class=dim style="font-size:12px;line-height:1.7"></div>
+    </div>
+  </div>
+
+  <div class=card style="margin-top:16px">
+    <h2>Recent requests</h2>
+    <table>
+      <thead><tr>
+        <th>time</th><th>model</th><th>status</th>
+        <th class=r>dur</th><th class=r>in</th><th class=r>out</th>
+      </tr></thead>
+      <tbody id=recent></tbody>
+    </table>
+  </div>
+
+  <div class=footer id=footer></div>
+
+<script>
+"use strict";
+
+const fmt = n => n == null ? '—' : n.toLocaleString();
+const fmtMs = ms => ms == null ? '—' : ms < 1000 ? ms + 'ms' : (ms/1000).toFixed(1) + 's';
+
+function shortModel(m) {
+  if (!m) return '?';
+  if (typeof m !== 'string') return String(m);
+  // NIM-style "nvidia_nim/z-ai/glm4.7" -> "glm4.7" (last path segment)
+  if (m.includes('/')) {
+    const parts = m.split('/');
+    return parts[parts.length - 1];
+  }
+  if (!m.startsWith('claude-')) return m;
+  const p = m.slice(7).split('-');
+  if (p.length >= 3 && /^\d+$/.test(p[1]) && /^\d+$/.test(p[2]) && p[2].length <= 2)
+    return p[0] + '-' + p[1] + '.' + p[2];
+  if (p.length >= 2) return p[0] + '-' + p[1];
+  return m;
+}
+
+function statusClass(s) {
+  if (s == null) return 'dim';
+  const n = Number(s);
+  if (!Number.isFinite(n)) return 'dim';
+  if (n >= 200 && n < 300) return 'ok';
+  if (n === 429 || (n >= 400 && n < 500)) return 'warn';
+  if (n >= 500) return 'err';
+  return 'dim';
+}
+
+function statusPill(s) {
+  const span = document.createElement('span');
+  span.className = 'pill ' + statusClass(s);
+  span.textContent = s == null ? '?' : String(s);
+  return span;
+}
+
+function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
+
+function setText(id, text) { document.getElementById(id).textContent = text; }
+
+function applySnapshot(d) {
+  setText('meta', `${d.now}  ·  log: ${d.log}  ·  ${fmt(d.entries)} entries  ·  served via ${shortModel(d.served_default || '?')}`);
+
+  // rate bar
+  setText('rate_now', d.last_min);
+  const pct = Math.min(100, 100 * d.last_min / d.rpm);
+  const bar = document.getElementById('rate_bar');
+  bar.style.width = pct + '%';
+  bar.style.background = pct < 60 ? '#3fb950' : pct < 90 ? '#d29922' : '#f85149';
+
+  // today
+  const t = d.today || {};
+  setText('today_total', fmt(t.total));
+  setText('today_total_tokens', fmt((t.input_tokens || 0) + (t.output_tokens || 0)));
+  setText('today_in', fmt(t.input_tokens));
+  setText('today_out', fmt(t.output_tokens));
+  setText('lat_p50', fmtMs(t.p50));
+  setText('lat_p95', fmtMs(t.p95));
+  setText('lat_avg', fmtMs(t.avg));
+
+  const sNode = document.getElementById('today_status');
+  clear(sNode);
+  for (const [k, v] of Object.entries(t.status || {})) {
+    sNode.appendChild(statusPill(k));
+    sNode.appendChild(document.createTextNode(' ' + v + '  '));
+  }
+
+  const mNode = document.getElementById('today_models');
+  clear(mNode);
+  for (const pair of (t.models || [])) {
+    const [m, c] = pair;
+    const span = document.createElement('span');
+    span.className = 'modeltag';
+    span.textContent = shortModel(m);
+    const dot = document.createElement('span');
+    dot.className = 'dim';
+    dot.textContent = ' · ';
+    const count = document.createTextNode(String(c));
+    span.appendChild(dot);
+    span.appendChild(count);
+    mNode.appendChild(span);
+  }
+
+  // recent rows
+  const tbody = document.getElementById('recent');
+  clear(tbody);
+  const recent = d.recent || [];
+  if (recent.length === 0) {
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 6;
+    td.className = 'dim';
+    td.textContent = 'no entries yet — run claude-nim -p hi';
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+  } else {
+    for (const e of recent) {
+      const tr = document.createElement('tr');
+      const tdT = document.createElement('td'); tdT.textContent = e.time || '—'; tr.appendChild(tdT);
+      const tdM = document.createElement('td'); tdM.textContent = shortModel(e.model); tr.appendChild(tdM);
+      const tdS = document.createElement('td'); tdS.appendChild(statusPill(e.status)); tr.appendChild(tdS);
+      const tdD = document.createElement('td'); tdD.className = 'r'; tdD.textContent = fmtMs(e.dur_ms); tr.appendChild(tdD);
+      const tdI = document.createElement('td'); tdI.className = 'r'; tdI.textContent = fmt(e.input_tokens); tr.appendChild(tdI);
+      const tdO = document.createElement('td'); tdO.className = 'r'; tdO.textContent = fmt(e.output_tokens); tr.appendChild(tdO);
+      tbody.appendChild(tr);
+    }
+  }
+
+  setText('footer', 'live · server-sent events');
+}
+
+// Prime the page with a one-shot snapshot, then upgrade to SSE.
+fetch('/api/usage', { cache: 'no-store' })
+  .then(r => r.json())
+  .then(applySnapshot)
+  .catch(() => setText('meta', 'connecting…'));
+
+let evt;
+function connectSSE() {
+  if (evt) evt.close();
+  evt = new EventSource('/api/stream');
+  evt.addEventListener('snapshot', (ev) => {
+    try { applySnapshot(JSON.parse(ev.data)); }
+    catch (e) { /* ignore parse errors */ }
+  });
+  evt.onerror = () => {
+    setText('footer', 'reconnecting in 2s…');
+    setTimeout(connectSSE, 2000);
+  };
+}
+connectSSE();
+</script>
+</body>
+</html>
+""".replace("%RPM%", str(NIM_RPM))
+
+
+def load(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    out = []
+    with path.open("rb") as f:
+        for raw in f:
+            line = raw.decode("utf-8", "replace").strip()
+            if not line:
+                continue
+            try:
+                e = json.loads(line)
+                e["_ts"] = datetime.fromisoformat(e["ts"].replace("Z", "+00:00"))
+                out.append(e)
+            except (json.JSONDecodeError, KeyError, ValueError):
+                continue
+    return out
+
+
+def pctile(values: list[int], p: float) -> int | None:
+    if not values:
+        return None
+    s = sorted(values)
+    return s[min(len(s) - 1, int(p / 100 * len(s)))]
+
+
+def snapshot(path: Path, model_map: dict[str, str], recent_n: int = 20) -> dict:
+    entries = load(path)
+    now = datetime.now(timezone.utc)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    minute_ago = now - timedelta(seconds=60)
+
+    today = [e for e in entries if e["_ts"] >= today_start]
+    last_min = [e for e in entries if e["_ts"] >= minute_ago]
+
+    durs = [e["dur_ms"] for e in today if isinstance(e.get("dur_ms"), int)]
+    in_tok = sum(e.get("input_tokens") or 0 for e in today)
+    out_tok = sum(e.get("output_tokens") or 0 for e in today)
+    status = Counter(str(e.get("status", "?")) for e in today)
+    # Bucket by SERVED model (NIM), not requested name. Showing the requested
+    # claude-haiku-* would obscure that everything routes through MODEL_HAIKU.
+    served_counter = Counter(
+        served_model(e.get("model"), model_map) or "?" for e in today
+    )
+    models = served_counter.most_common()
+
+    recent = []
+    for e in entries[-recent_n:][::-1]:
+        recent.append({
+            "time": e["_ts"].astimezone().strftime("%H:%M:%S"),
+            "model": served_model(e.get("model"), model_map) or e.get("model"),
+            "requested": e.get("model"),
+            "status": e.get("status"),
+            "dur_ms": e.get("dur_ms"),
+            "input_tokens": e.get("input_tokens"),
+            "output_tokens": e.get("output_tokens"),
+        })
+
+    return {
+        "now": now.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z"),
+        "log": str(path),
+        "entries": len(entries),
+        "rpm": NIM_RPM,
+        "last_min": len(last_min),
+        "model_map": model_map,
+        "served_default": model_map.get("MODEL") or model_map.get("MODEL_HAIKU"),
+        "today": {
+            "total": len(today),
+            "input_tokens": in_tok,
+            "output_tokens": out_tok,
+            "p50": pctile(durs, 50),
+            "p95": pctile(durs, 95),
+            "avg": int(sum(durs) / len(durs)) if durs else None,
+            "status": dict(status),
+            "models": models,
+        },
+        "recent": recent,
+    }
+
+
+class Handler(BaseHTTPRequestHandler):
+    log_path: Path = DEFAULT_LOG
+    env_path: Path = DEFAULT_ENV
+    sse_interval: float = 1.0
+
+    def _send(self, code: int, body: bytes, content_type: str) -> None:
+        self.send_response(code)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _model_map(self) -> dict[str, str]:
+        # Re-read on every request so edits to .env (model swap) reflect live.
+        return load_model_map(self.env_path)
+
+    def _stream_sse(self) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+        try:
+            while True:
+                snap = snapshot(self.log_path, self._model_map())
+                payload = json.dumps(snap)
+                # Each SSE message: event name + single data line + blank line.
+                # We squash any newlines in the payload — JSON has none here.
+                self.wfile.write(b"event: snapshot\n")
+                self.wfile.write(b"data: " + payload.encode("utf-8") + b"\n\n")
+                self.wfile.flush()
+                time.sleep(self.sse_interval)
+        except (BrokenPipeError, ConnectionResetError):
+            return
+
+    def do_GET(self):  # noqa: N802
+        if self.path == "/" or self.path.startswith("/?"):
+            self._send(200, INDEX_HTML.encode("utf-8"), "text/html; charset=utf-8")
+        elif self.path == "/api/usage":
+            data = json.dumps(snapshot(self.log_path, self._model_map())).encode("utf-8")
+            self._send(200, data, "application/json")
+        elif self.path == "/api/stream":
+            self._stream_sse()
+        else:
+            self._send(404, b"not found\n", "text/plain")
+
+    def log_message(self, *_):
+        if os.environ.get("NIM_DASH_VERBOSE"):
+            super().log_message(*_)
+
+
+def main() -> int:
+    p = argparse.ArgumentParser()
+    p.add_argument("--port", type=int, default=int(os.environ.get("NIM_DASH_PORT", "8083")))
+    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--log", type=Path, default=DEFAULT_LOG)
+    p.add_argument("--env", type=Path, default=DEFAULT_ENV,
+                   help="proxy/.env to read MODEL_OPUS/SONNET/HAIKU from (default: ../proxy/.env)")
+    p.add_argument("--interval", type=float, default=1.0, help="SSE tick seconds (default 1.0)")
+    p.add_argument("--open", action="store_true", help="open browser tab on start")
+    args = p.parse_args()
+
+    Handler.log_path = args.log
+    Handler.env_path = args.env
+    Handler.sse_interval = args.interval
+    srv = ThreadingHTTPServer((args.host, args.port), Handler)
+    url = f"http://{args.host}:{args.port}/"
+    mp = load_model_map(args.env)
+    print(f"[claude-nim-dashboard] serving {url}", flush=True)
+    print(f"[claude-nim-dashboard] reading log: {args.log}", flush=True)
+    print(f"[claude-nim-dashboard] reading env: {args.env}", flush=True)
+    if mp:
+        print(f"[claude-nim-dashboard] model map: {mp}", flush=True)
+    else:
+        print(f"[claude-nim-dashboard] WARN: no MODEL_* keys found in {args.env}", flush=True)
+    if args.open:
+        import webbrowser
+        webbrowser.open(url)
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        print("\n[claude-nim-dashboard] stopped", flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

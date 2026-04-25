@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# stop-nim-proxy (mac) — terminate the NIM proxy listening on :8082 (or $NIM_PROXY_PORT).
+# macOS counterpart of bin/stop-nim-proxy. Uses lsof since there's no `wsl --shutdown` here.
+set -eu
+
+PORT=${NIM_PROXY_PORT:-8082}
+
+reachable() {
+    local code
+    code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 2 \
+        "http://localhost:${PORT}/" 2>/dev/null) || code="000"
+    [ "$code" != "000" ] && [ -n "$code" ]
+}
+
+if ! reachable; then
+    echo "[stop-nim-proxy] nothing reachable on :${PORT}" >&2
+    exit 0
+fi
+
+PIDS="$(lsof -nP -ti tcp:"${PORT}" -sTCP:LISTEN 2>/dev/null || true)"
+if [ -z "$PIDS" ]; then
+    echo "[stop-nim-proxy] WARN: port ${PORT} is reachable but no listener PID found via lsof" >&2
+    exit 1
+fi
+
+echo "[stop-nim-proxy] sending SIGTERM to: $PIDS"
+# shellcheck disable=SC2086
+kill $PIDS 2>/dev/null || true
+
+# Walk children too (uvicorn forks workers); kill the process group(s).
+for pid in $PIDS; do
+    pgid=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ' || true)
+    [ -n "$pgid" ] && kill -- "-$pgid" 2>/dev/null || true
+done
+
+for _ in $(seq 1 10); do
+    sleep 0.5
+    reachable || { echo "[stop-nim-proxy] done"; exit 0; }
+done
+
+echo "[stop-nim-proxy] SIGTERM didn't take — escalating to SIGKILL" >&2
+# shellcheck disable=SC2086
+kill -9 $PIDS 2>/dev/null || true
+sleep 1
+if reachable; then
+    echo "[stop-nim-proxy] ERROR: proxy still reachable after SIGKILL" >&2
+    exit 1
+fi
+echo "[stop-nim-proxy] done"
