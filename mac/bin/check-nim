@@ -85,7 +85,14 @@ ISO="$HOME/claude-nim-home"
 if [ -d "$ISO/.claude" ]; then
     ok "Isolated HOME exists at $ISO/.claude"
     if [ -f "$ISO/.claude/.credentials.json" ]; then
-        bad "ISOLATED HOME has .credentials.json!" "Means a real login leaked. Remove: rm '$ISO/.claude/.credentials.json'"
+        # Only flag actual Anthropic OAuth markers — claude-code writes
+        # mcpOAuth (Vercel, GitHub MCP, etc.) into this file on first run,
+        # which is fine and not a leak.
+        if grep -qE 'claudeAiOauth|sk-ant-|api\.anthropic' "$ISO/.claude/.credentials.json" 2>/dev/null; then
+            bad "Isolated HOME has Anthropic OAuth!" "Real login leaked. Remove: rm '$ISO/.claude/.credentials.json'"
+        else
+            ok "Isolated HOME .credentials.json present (mcpOAuth only — no Anthropic markers)"
+        fi
     else
         ok "No stored credentials in isolated HOME (env-var auth will win)"
     fi

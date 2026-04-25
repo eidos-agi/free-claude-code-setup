@@ -14,7 +14,11 @@ set -u
 VALIDATION="V3 rate-limit (mac)"
 BURST=${BURST:-60}
 CONCURRENCY=${CONCURRENCY:-8}
-TIMEOUT_PER=${TIMEOUT_PER:-30}
+# Each claude-nim invocation issues ~2 proxy calls (init + inference). With
+# NIM's 40/min cap, concurrency 8, and step-3.5-flash averaging ~7s, the tail
+# of clients can sit in the proxy's rate-limit queue past 30s. 60s tolerates
+# normal queue-and-serve behaviour without masking a real hang.
+TIMEOUT_PER=${TIMEOUT_PER:-60}
 LOG_CACHE="$HOME/.cache/nim-proxy.log"
 WORK=$(mktemp -d -t claude-nim-burst)
 trap "rm -rf $WORK" EXIT
