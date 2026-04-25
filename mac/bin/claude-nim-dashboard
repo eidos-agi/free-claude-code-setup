@@ -35,6 +35,46 @@ NIM_RPM = 40
 
 _ENV_RE = re.compile(r'^([A-Z_][A-Z0-9_]*)\s*=\s*"?([^"\n]*)"?\s*$')
 
+# Anthropic public list pricing as of 2026-Q2, USD per million tokens.
+# Updated source-of-truth: https://www.anthropic.com/pricing — bump these
+# when Anthropic adjusts. The (in_per_mtok, out_per_mtok) tuple is what
+# we'd be paying if these requests had gone direct to api.anthropic.com.
+_ANTHROPIC_PRICING_USD_PER_MTOK = {
+    "haiku":  (0.80,  4.00),   # haiku 4 / 4.5
+    "sonnet": (3.00, 15.00),   # sonnet 4 / 4.5 / 4.6
+    "opus":  (15.00, 75.00),   # opus 4 / 4.7
+}
+
+
+def _tier_for(requested_model: str | None) -> str | None:
+    """Map an Anthropic-style requested name to its pricing tier."""
+    if not requested_model:
+        return None
+    m = requested_model.lower()
+    if "opus" in m:
+        return "opus"
+    if "sonnet" in m:
+        return "sonnet"
+    if "haiku" in m:
+        return "haiku"
+    return None
+
+
+def _counterfactual_cost_usd(requested_model: str | None,
+                              input_tokens: int | None,
+                              output_tokens: int | None) -> float:
+    """What this single request would have cost on Anthropic. 0.0 if unknown."""
+    tier = _tier_for(requested_model)
+    if tier is None:
+        return 0.0
+    in_rate, out_rate = _ANTHROPIC_PRICING_USD_PER_MTOK[tier]
+    cost = 0.0
+    if isinstance(input_tokens, int) and input_tokens > 0:
+        cost += (input_tokens / 1_000_000.0) * in_rate
+    if isinstance(output_tokens, int) and output_tokens > 0:
+        cost += (output_tokens / 1_000_000.0) * out_rate
+    return cost
+
 
 def load_model_map(env_path: Path) -> dict[str, str]:
     """Parse proxy/.env and return {requested-prefix: served-model}.
@@ -335,6 +375,14 @@ def snapshot(path: Path, model_map: dict[str, str], recent_n: int = 20) -> dict:
     durs = [e["dur_ms"] for e in today if isinstance(e.get("dur_ms"), int)]
     in_tok = sum(e.get("input_tokens") or 0 for e in today)
     out_tok = sum(e.get("output_tokens") or 0 for e in today)
+    saved_today_usd = round(sum(
+        _counterfactual_cost_usd(e.get("model"), e.get("input_tokens"), e.get("output_tokens"))
+        for e in today
+    ), 4)
+    saved_all_usd = round(sum(
+        _counterfactual_cost_usd(e.get("model"), e.get("input_tokens"), e.get("output_tokens"))
+        for e in entries
+    ), 4)
     status = Counter(str(e.get("status", "?")) for e in today)
     # Bucket by SERVED model (NIM), not requested name. Showing the requested
     # claude-haiku-* would obscure that everything routes through MODEL_HAIKU.
@@ -363,6 +411,8 @@ def snapshot(path: Path, model_map: dict[str, str], recent_n: int = 20) -> dict:
         "last_min": len(last_min),
         "model_map": model_map,
         "served_default": model_map.get("MODEL") or model_map.get("MODEL_HAIKU"),
+        "saved_today_usd": saved_today_usd,
+        "saved_all_usd": saved_all_usd,
         "today": {
             "total": len(today),
             "input_tokens": in_tok,
