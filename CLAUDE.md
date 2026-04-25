@@ -2,6 +2,8 @@
 
 This file auto-loads when a Claude Code session has this repo as cwd. Read it first before acting.
 
+**If you're debugging something WSL-specific, jump straight to [`insights/wsl/README.md`](insights/wsl/README.md) — symptom-keyed index covering every WSL1 failure mode we've hit (line-ending drift, exec-bit clobbering, systemd reconfigure cascade, tmp ownership traps, `ss` blindness across shells, Shadow-PC no-virt, Tailscale DNS, claude-code 2.1.83+ ELF mismatch, etc.).**
+
 ## Two self-improvement loops are wired into this repo
 
 This repo is set up to **improve itself over time** via [hone](https://github.com/eidos-agi/hone), an MCP server that runs a 4-phase ceremony — Observe → Diagnose+Change → Measure → Retain. `.mcp.json` registers hone for any session with this repo as cwd; `.hone/mission.md` defines what "better" means here so Diagnose+Change has intent.
