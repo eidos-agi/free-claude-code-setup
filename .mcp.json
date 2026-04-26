@@ -8,6 +8,27 @@
         "run",
         "hone"
       ]
+    },
+    "research-md": {
+      "command": "/home/dshanklin/.local/bin/research-md",
+      "args": ["mcp", "start"]
+    },
+    "visionlog": {
+      "command": "/home/dshanklin/.local/bin/visionlog",
+      "args": ["mcp", "start"]
+    },
+    "ike-md": {
+      "command": "/home/dshanklin/.local/bin/ike-md",
+      "args": ["mcp", "start"]
+    },
+    "lighthouse": {
+      "command": "/home/dshanklin/.local/bin/uv",
+      "args": [
+        "--directory",
+        "/home/dshanklin/repos-eidos-agi/lighthouse",
+        "run",
+        "lighthouse-mcp"
+      ]
     }
   }
 }
